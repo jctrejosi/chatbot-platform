@@ -1,10 +1,14 @@
 require('dotenv').config();
 
 const express = require('express');
+const cors = require('cors');
 const { sendMessage, markAsRead } = require('./whatsapp');
 const { chatWithDeepSeek } = require('./deepseek');
 
 const app = express();
+
+// ─── CORS ───────────────────────────────────────────────────────────────
+app.use(cors({ origin: '*' }));
 app.use(express.json());
 
 // ─── Webhook verification (GET) ───────────────────────────────────────
@@ -65,6 +69,55 @@ app.post('/webhook', async (req, res) => {
     if (error.response) {
       console.error('Detalle:', JSON.stringify(error.response.data, null, 2));
     }
+  }
+});
+
+const axios = require('axios');
+
+const KNOWLEDGE_URL = process.env.KNOWLEDGE_SERVICE_URL || 'http://localhost:8000';
+
+// ─── Proxy to knowledge-service ────────────────────────────────────────
+const knowledge = axios.create({ baseURL: KNOWLEDGE_URL });
+
+app.get('/sources', async (req, res) => {
+  try {
+    const { data } = await knowledge.get('/sources');
+    res.json(data);
+  } catch (e) { res.status(502).json({ error: 'Knowledge service unreachable' }); }
+});
+
+app.get('/sources/:id', async (req, res) => {
+  try {
+    const { data } = await knowledge.get(`/sources/${req.params.id}`);
+    res.json(data);
+  } catch (e) { res.status(502).json({ error: 'Knowledge service unreachable' }); }
+});
+
+app.post('/ingest', async (req, res) => {
+  try {
+    const { data } = await knowledge.post('/ingest', req.body);
+    res.json(data);
+  } catch (e) { res.status(502).json({ error: 'Knowledge service unreachable' }); }
+});
+
+app.get('/health', async (req, res) => {
+  try {
+    const { data } = await knowledge.get('/health');
+    res.json(data);
+  } catch (e) { res.status(502).json({ error: 'Knowledge service unreachable' }); }
+});
+
+// ─── Chat endpoint (for frontend) ─────────────────────────────────────
+app.post('/chat', async (req, res) => {
+  try {
+    const { query, user_id, user_name } = req.body;
+    if (!query) return res.status(400).json({ error: 'query is required' });
+
+    const answer = await chatWithDeepSeek(query, user_name || 'Usuario');
+    res.json({ query, answer });
+  } catch (error) {
+    console.error('Chat error:', error.message);
+    res.status(500).json({ error: 'Error procesando el mensaje' });
   }
 });
 
