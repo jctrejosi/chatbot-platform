@@ -1,0 +1,10 @@
+{
+  "name": "whatsapp-bot-dev",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Orquestador de desarrollo: levanta backend, chat-web y knowledge-service",
+  "scripts": {
+    "start": "node start.js",
+    "dev": "node start.js"
+  }
+}

@@ -155,9 +155,63 @@ async function resetSettings(botId) {
   return await getSettings(botId);
 }
 
+/**
+ * Encuentra el bot cuyo número de WhatsApp recibió un mensaje.
+ *
+ * Meta envía en cada webhook: metadata.phone_number_id (ID del número) y
+ * metadata.display_phone_number (el número con prefijo). El match se hace
+ * contra los settings guardados por bot (whatsappPhoneNumberId o whatsappPhone).
+ *
+ * Devuelve el bot_id o null (→ se usa la configuración global / env).
+ */
+async function findBotIdByPhoneNumber(phoneNumberId, displayPhone) {
+  if (!phoneNumberId && !displayPhone) return null;
+  try {
+    const { rows } = await query(
+      `SELECT bot_id FROM bot_settings
+       WHERE bot_id IS NOT NULL
+         AND (
+           ($1::text IS NOT NULL AND settings->>'whatsappPhoneNumberId' = $1)
+           OR ($2::text IS NOT NULL
+               AND regexp_replace(settings->>'whatsappPhone', '\\D', '', 'g')
+                 = regexp_replace($2, '\\D', '', 'g'))
+         )
+       LIMIT 1`,
+      [phoneNumberId || null, displayPhone || null]
+    );
+    return rows[0]?.bot_id || null;
+  } catch (err) {
+    console.warn('No se pudo resolver bot por número WhatsApp:', err.message);
+    return null;
+  }
+}
+
+/**
+ * Verifica si algún bot tiene configurado este verify token de webhook.
+ *
+ * Cada cliente tiene su propio Meta app (y por tanto su propio verify token),
+ * todos apuntando a la misma callback URL. Meta llama al GET /webhook con el
+ * token de cada app; el backend debe aceptar cualquiera que esté guardado.
+ */
+async function botMatchesVerifyToken(token) {
+  if (!token) return false;
+  try {
+    const { rows } = await query(
+      `SELECT 1 FROM bot_settings
+       WHERE bot_id IS NOT NULL AND settings->>'whatsappVerifyToken' = $1
+       LIMIT 1`,
+      [token]
+    );
+    return rows.length > 0;
+  } catch (err) {
+    console.warn('No se pudo validar verify token por bot:', err.message);
+    return false;
+  }
+}
+
 /** Limpia la caché de settings para un bot (al eliminarlo). */
 function clearSettingsCache(botId) {
   settingsCache.delete(cacheKey(botId));
 }
 
-module.exports = { getSettings, updateSettings, resetSettings, clearSettingsCache, ALLOWED_MODELS };
+module.exports = { getSettings, updateSettings, resetSettings, clearSettingsCache, findBotIdByPhoneNumber, botMatchesVerifyToken, ALLOWED_MODELS };

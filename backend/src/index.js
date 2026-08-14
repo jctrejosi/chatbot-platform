@@ -5,7 +5,7 @@ const cors = require('cors');
 const { sendMessage, markAsRead } = require('./whatsapp');
 const { chatWithDeepSeek, listModels } = require('./deepseek');
 const { FUNCTION_CATALOG } = require('./functions');
-const { getSettings, updateSettings, resetSettings } = require('./settings');
+const { getSettings, updateSettings, resetSettings, findBotIdByPhoneNumber, botMatchesVerifyToken } = require('./settings');
 const { sendEscalationEmail } = require('./escalation');
 const { getLogs } = require('./logger');
 const { listBots, createBot, deleteBot, updateBot } = require('./bot-manager');
@@ -33,12 +33,20 @@ app.use((req, res, next) => {
 });
 
 // ─── Webhook verification (GET) ───────────────────────────────────────
-app.get('/webhook', (req, res) => {
+app.get('/webhook', async (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
 
-  if (mode === 'subscribe' && token === process.env.WHATSAPP_VERIFY_TOKEN) {
+  // Cada cliente tiene su propio Meta app y su propio verify token. El token
+  // puede ser el global (DB/env) o el de CUALQUIER bot guardado en la DB.
+  const { whatsappVerifyToken } = await getSettings();
+  const valid =
+    mode === 'subscribe' &&
+    !!token &&
+    (token === whatsappVerifyToken || (await botMatchesVerifyToken(token)));
+
+  if (valid) {
     console.log('Webhook verificado correctamente');
     return res.status(200).send(challenge);
   }
@@ -64,6 +72,17 @@ app.post('/webhook', async (req, res) => {
     const contact = value.contacts?.[0];
     const metadata = value.metadata;
 
+    // Multi-bot: resolver qué bot recibió el mensaje según el número de WhatsApp
+    // y usar SUS credenciales guardadas en la DB (fallback: global/env).
+    const botId = await findBotIdByPhoneNumber(
+      metadata?.phone_number_id,
+      metadata?.display_phone_number
+    );
+    const settings = await getSettings(botId);
+    if (botId) {
+      console.log(`Mensaje para el bot ${botId} (${metadata?.display_phone_number})`);
+    }
+
     for (const msg of messages) {
       // Ignore non-text messages and outgoing messages
       if (msg.type !== 'text' || msg.from === metadata?.phone_number_id) continue;
@@ -74,11 +93,11 @@ app.post('/webhook', async (req, res) => {
 
       console.log(`Mensaje de ${senderName} (${senderPhone}): "${messageText}"`);
 
-      // Mark message as read
-      await markAsRead(senderPhone, msg.id);
+      // Mark message as read (con credenciales del bot)
+      await markAsRead(senderPhone, msg.id, settings);
 
-      // Get response from DeepSeek
-      const result = await chatWithDeepSeek(messageText, senderName, senderPhone);
+      // Get response from DeepSeek (con el conocimiento y settings del bot)
+      const result = await chatWithDeepSeek(messageText, senderName, senderPhone, botId);
       const aiResponse = result.answer;
       console.log(`Respuesta DeepSeek: "${aiResponse}"`);
 
@@ -91,8 +110,8 @@ app.post('/webhook', async (req, res) => {
         chunks_used: [],
       }).catch(err => console.warn('Conversation save failed:', err.message));
 
-      // Send response back to WhatsApp
-      await sendMessage(senderPhone, aiResponse);
+      // Send response back to WhatsApp (con credenciales del bot)
+      await sendMessage(senderPhone, aiResponse, settings);
       console.log('Respuesta enviada a WhatsApp');
     }
   } catch (error) {
