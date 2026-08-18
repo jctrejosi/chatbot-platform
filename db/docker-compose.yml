@@ -1,3 +1,8 @@
+# Nombre de proyecto propio: otros proyectos en esta máquina también usan
+# proyecto "db" (p. ej. meraldas-ecommerce y tesis), y docker compose los
+# mezclaría. Con name propio, este compose solo toca sus contenedores.
+name: chatbot-db
+
 services:
   postgres:
     build: .

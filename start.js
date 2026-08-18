@@ -335,46 +335,36 @@ function shQuote(s) {
   return `'${String(s).replace(/'/g, `'\''`)}'`;
 }
 
-// Nombre/ID del contenedor de la DB: el servicio `postgres` del compose de
-// db/; si no está arriba, cualquier contenedor que publique el puerto de la
-// DB (POSTGRES_PORT, por defecto 5432). Devuelve null si no hay contenedor.
+// Nombre/ID del contenedor de la DB: el `knowledge-db` del compose de db/
+// (container_name fijo); si no está arriba, cualquier contenedor que
+// publique el puerto de la DB (POSTGRES_PORT, por defecto 5432).
+// Devuelve null si no hay contenedor.
 function dbContainer() {
-  const composeFile = path.join(ROOT, 'db', 'docker-compose.yml');
-  let id = null;
+  // 1) El contenedor de este proyecto (nombre fijo en docker-compose.yml).
+  //    Ojo: NO usar `docker compose ps` para buscar — el nombre de proyecto
+  //    es "db" (el de la carpeta) y colisiona con otros proyectos que
+  //    también tengan una carpeta db/ (resolvía al contenedor equivocado).
   try {
-    const out = execFileSync('docker', ['compose', '-f', composeFile, 'ps', '-q', 'postgres'], {
+    const out = execFileSync(
+      'docker',
+      ['ps', '--filter', 'name=^/knowledge-db$', '--format', '{{.Names}}'],
+      { stdio: ['ignore', 'pipe', 'ignore'] },
+    )
+      .toString()
+      .trim();
+    if (out) return out.split('\n')[0].trim();
+  } catch {}
+  // 2) Fallback: cualquier contenedor que publique el puerto de la DB.
+  const port = process.env.POSTGRES_PORT || '5432';
+  try {
+    const out = execFileSync('docker', ['ps', '-q', '--filter', `publish=${port}`], {
       stdio: ['ignore', 'pipe', 'ignore'],
     })
       .toString()
       .trim();
-    if (out) id = out.split('\n')[0].trim();
-  } catch {
-    // docker no disponible o sin contenedores del compose: probamos por puerto.
-  }
-  if (!id) {
-    const port = process.env.POSTGRES_PORT || '5432';
-    try {
-      const out = execFileSync('docker', ['ps', '-q', '--filter', `publish=${port}`], {
-        stdio: ['ignore', 'pipe', 'ignore'],
-      })
-        .toString()
-        .trim();
-      if (out) id = out.split('\n')[0].trim();
-    } catch {}
-  }
-  if (id) {
-    // Mostrar el nombre del contenedor en vez del ID (más legible).
-    try {
-      const name = execFileSync('docker', ['inspect', '-f', '{{.Name}}', id], {
-        stdio: ['ignore', 'pipe', 'ignore'],
-      })
-        .toString()
-        .trim()
-        .replace(/^\//, '');
-      if (name) id = name;
-    } catch {}
-  }
-  return id;
+    if (out) return out.split('\n')[0].trim();
+  } catch {}
+  return null;
 }
 
 // Abre una terminal por fuente de logs: backend, chat-web, knowledge-service

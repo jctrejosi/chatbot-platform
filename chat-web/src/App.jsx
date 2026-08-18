@@ -46,7 +46,7 @@ function TypingIndicator({ botName }) {
 }
 
 /* ─── Chat Panel ──────────────────────── */
-function ChatPanel({ online, botId, botName, checking, onRetry, error, hasBots }) {
+function ChatPanel({ online, botId, botName, checking, onRetry, error, hasBots, onCreateBot }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -157,8 +157,11 @@ function ChatPanel({ online, botId, botName, checking, onRetry, error, hasBots }
           <div className="connect-screen">
             <div className="connect-title">🤖 No tienes bots aún</div>
             <div className="connect-hint">
-              Crea un bot desde el panel lateral (<strong>+ Nuevo Bot</strong>) para empezar a chatear.
+              Crea tu primer bot para empezar a chatear.
             </div>
+            <button className="btn btn-primary" onClick={onCreateBot}>
+              + Nuevo Bot
+            </button>
           </div>
         )}
         {online && messages.length === 0 && welcome && (
@@ -1411,6 +1414,11 @@ export default function App() {
           onRetry={retryConnection}
           error={error}
           hasBots={bots.length > 0}
+          onCreateBot={() => {
+            setSelectedBotId(null);
+            setCreatingBot(true);
+            setSettingsOpen(true);
+          }}
         />
       </main>
 
