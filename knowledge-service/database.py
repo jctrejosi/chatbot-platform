@@ -12,12 +12,16 @@ DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localho
 
 _pool: asyncpg.Pool | None = None
 
+# Supabase exige SSL; asyncpg con ssl="require" cifra sin verificar la CA
+# (necesario con el pooler de Supabase).
+_POOL_KWARGS = {"ssl": "require"} if "supabase.co" in (DATABASE_URL or "") else {}
+
 
 async def get_pool() -> asyncpg.Pool:
     """Return the global connection pool, creating it if necessary."""
     global _pool
     if _pool is None:
-        _pool = await asyncpg.create_pool(DATABASE_URL, min_size=2, max_size=10)
+        _pool = await asyncpg.create_pool(DATABASE_URL, min_size=2, max_size=10, **_POOL_KWARGS)
     return _pool
 
 

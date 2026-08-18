@@ -6,10 +6,15 @@ const { Pool } = require('pg');
 
 const DATABASE_URL = process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/knowledge_db';
 
+// Supabase (host *.supabase.co) exige SSL y su pooler usa una cadena de
+// certificados que node-postgres no verifica por defecto con sslmode estricto.
+const SSL = DATABASE_URL.includes('supabase.co') ? { ssl: { rejectUnauthorized: false } } : {};
+
 const pool = new Pool({
   connectionString: DATABASE_URL,
   max: 5,
   idleTimeoutMillis: 30000,
+  ...SSL,
 });
 
 pool.on('error', (err) => {

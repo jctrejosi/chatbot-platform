@@ -297,6 +297,21 @@ function mount(service) {
 // (mismo estilo que los servicios: detached + truncado en cada arranque).
 function mountDbLogs() {
   fs.mkdirSync(LOG_DIR, { recursive: true });
+  // DB gestionada (Supabase/Neon): no hay contenedor local que seguir; los
+  // logs de la base están en el dashboard del proveedor.
+  const dbEnvPath = path.join(ROOT, 'backend', '.env');
+  const usesManagedDb =
+    (process.env.DATABASE_URL || '').includes('supabase.co') ||
+    (fs.existsSync(dbEnvPath) && fs.readFileSync(dbEnvPath, 'utf8').includes('supabase.co'));
+  if (usesManagedDb) {
+    fs.writeFileSync(
+      path.join(LOG_DIR, 'db.log'),
+      'DB en Supabase — los logs de la base están en el dashboard:\n' +
+        'https://supabase.com/dashboard/project/idiypzqlbjeqgphjlabz\n',
+    );
+    console.log(`${GREEN}✔${RESET} [db] DB en Supabase: logs en el dashboard de Supabase.`);
+    return;
+  }
   const logPath = path.join(LOG_DIR, 'db.log');
   const target = dbContainer();
   if (!target) {
