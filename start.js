@@ -1008,10 +1008,11 @@ async function pullSupabaseLogs(outDir) {
     try {
       data = await httpPostJson(url, { sql: minimal }, { headers: { Authorization: `Bearer ${token}` } });
     } catch (e2) {
-      // La Logs API histórica requiere service_role key (JWT) o sesión del dashboard.
+      // La Logs API histórica requiere un JWT con permisos (service_role legacy eyJ...).
       console.warn(`${YELLOW}⚠${RESET} Logs API de Supabase no disponible con este token (${e2.message}).`);
-      console.log(`${DIM}  Los logs históricos de la DB requieren la service_role key del dashboard
-  (Project Settings → API) o exportarlos desde el Logs Explorer. Mientras tanto,
+      console.log(`${DIM}  Los logs históricos de la DB requieren el JWT legacy de service_role (eyJ...,
+  no el formato sb_secret_ ni sbp_) desde Project Settings → API Keys,
+  o exportarlos desde el Logs Explorer del dashboard. Mientras tanto,
   bajo un snapshot de actividad actual de la DB (misma DATABASE_URL).${RESET}`);
       await pullDbActivity(outDir);
       return;
