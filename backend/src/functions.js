@@ -309,6 +309,216 @@ const FUNCTION_MAP = {
   calcular_presupuesto: calcularPlan,
 };
 
+// ============================================================================
+// Validación de coherencia antes de ejecutar una calling function.
+//
+// El modelo puede "alucinar" una llamada (datos inventados o acciones que el
+// cliente nunca pidió). Antes de ejecutar cualquier función con efectos
+// secundarios (correo, asesor, cierre de venta) se verifica que la solicitud
+// tenga respaldo en la conversación. Si no lo tiene, la función NO se ejecuta:
+// el modelo recibe un mensaje para pedir confirmación o los datos faltantes.
+// Las funciones de solo lectura (listar_caracteristicas, obtener_*) no se
+// validan porque no tienen efectos secundarios.
+// ============================================================================
+
+const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
+const PHONE_RE = /^\+?[\d\s().-]{7,15}$/;
+
+const norm = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+function textOf(arr) {
+  return (arr || [])
+    .map((m) => (typeof m.text === 'string' ? m.text : typeof m.content === 'string' ? m.content : ''))
+    .join('\n');
+}
+
+function buildContext(messages) {
+  const users = (messages || []).filter((m) => m.role === 'user');
+  const assistants = (messages || []).filter((m) => m.role === 'assistant');
+  const last = users[users.length - 1];
+  return {
+    text: textOf([...users, ...assistants]),
+    userText: textOf(users),
+    assistantText: textOf(assistants),
+    lastUserText: last ? (typeof last.text === 'string' ? last.text : typeof last.content === 'string' ? last.content : '') : '',
+  };
+}
+
+function mentions(text, words) {
+  const t = norm(text);
+  return words.some((w) => t.includes(norm(w)));
+}
+
+function textHasEmail(text, email) {
+  if (!email) return false;
+  return norm(text).includes(norm(email));
+}
+
+/** Números de "personas totales" mencionados en la conversación. */
+function extractPeopleTotals(text) {
+  const t = norm(text);
+  const nums = [];
+  const re1 = /(\d+)\s*(personas?|pax|huespedes|huéspedes|viajeros?|integrantes?)/g;
+  let m;
+  while ((m = re1.exec(t))) nums.push(parseInt(m[1], 10));
+  const re2 = /(somos|viajamos|vamos|grupo de|para)\s*(\d+)/g;
+  while ((m = re2.exec(t))) nums.push(parseInt(m[2], 10));
+  return [...new Set(nums)];
+}
+
+const blocked = (reason, message) => ({ ok: false, reason, message });
+const allowed = () => ({ ok: true });
+
+/** ¿El último mensaje del cliente confirma una oferta/ pregunta del bot? */
+function isConfirmation(text) {
+  const t = norm(text).trim();
+  const yes = ['si', 'sí', 'ok', 'dale', 'claro', 'perfecto', 'bueno', 'listo', 'exacto', 'confirmo', 'hazlo', 'adelante'];
+  return yes.some((w) => t === w || t.startsWith(w + ' ') || t.includes(' ' + w + ' ') || t.endsWith(' ' + w));
+}
+
+// Verbo de envío en cualquier forma (enviar, envíen, envíame, manda, mandar…)
+const EMAIL_SEND_RE = /(envi|mand)/;
+
+function validateEmailRequest(args, ctx) {
+  const email = (args.email || '').trim();
+  if (!email || !EMAIL_RE.test(email)) {
+    return blocked(
+      'correo_faltante',
+      'El cliente no ha dado su correo electrónico en la conversación. Pídele su correo antes de enviar la información.'
+    );
+  }
+  // El correo debe haber sido escrito por el CLIENTE (no inventado por el modelo)
+  if (!textHasEmail(ctx.userText, email)) {
+    return blocked(
+      'correo_inventado',
+      `El correo "${email}" no aparece en la conversación. No envíes a una dirección no confirmada: confírmala con el cliente antes de ejecutar el envío.`
+    );
+  }
+  // ¿El cliente pidió el envío? Verbo de envío, o confirmación tras oferta del bot
+  const t = norm(ctx.text);
+  const pidioEnvio =
+    EMAIL_SEND_RE.test(t) ||
+    t.includes('al correo') || t.includes('por correo') || t.includes('por email') || t.includes('al mail');
+  if (!pidioEnvio) {
+    const botOfrecio = EMAIL_SEND_RE.test(norm(ctx.assistantText)) || /(correo|email|mail)/.test(norm(ctx.assistantText));
+    if (!(botOfrecio && isConfirmation(ctx.lastUserText))) {
+      return blocked(
+        'sin_pedido_envio',
+        'El cliente no ha pedido que se le envíe información por correo. No ejecutes el envío; pregúntale si quiere que se la enviemos por email.'
+      );
+    }
+  }
+  return allowed();
+}
+
+function validateAdvisorRequest(args, ctx) {
+  const text = ctx.text;
+  if (!mentions(text, [
+    'asesor', 'agente', 'vendedor', 'ejecutivo', 'representante',
+    'persona real', 'hablar con alguien', 'un humano', 'con un humano',
+    'contactarme', 'contacto', 'que me contacten', 'me contacte', 'me contacten',
+    'llamar', 'llamen', 'llamada', 'atencion personalizada', 'atencion humana',
+  ])) {
+    return blocked(
+      'sin_pedido_asesor',
+      'El cliente no ha pedido hablar con un asesor. No notifiques al equipo; continúa atendiendo la consulta y solo ofrece el asesor si el cliente lo solicita.'
+    );
+  }
+  if (!(args.telefono || args.email)) {
+    return blocked(
+      'sin_contacto',
+      'Falta el teléfono o correo del cliente para que el asesor lo contacte. Pídele su teléfono o correo antes de notificar al equipo.'
+    );
+  }
+  if (args.email && !textHasEmail(ctx.userText, args.email)) {
+    return blocked(
+      'correo_inventado',
+      `El correo "${args.email}" no aparece en la conversación. Confírmalo con el cliente antes de notificar al asesor.`
+    );
+  }
+  if (args.telefono && !PHONE_RE.test(String(args.telefono))) {
+    return blocked(
+      'telefono_invalido',
+      `El teléfono "${args.telefono}" no parece un número válido. Confirma el número con el cliente antes de notificar al asesor.`
+    );
+  }
+  return allowed();
+}
+
+function validateCloseSale(args, ctx) {
+  const text = ctx.text;
+  if (!mentions(text, [
+    'reservar', 'reserva', 'comprar', 'compra', 'apartar', 'aparta',
+    'adquirir', 'contratar', 'confirmar', 'confirmacion', 'confirmación',
+    'me interesa', 'pagar', 'proceder', 'cerrar la', 'quiero pagar',
+  ])) {
+    return blocked(
+      'sin_intencion_compra',
+      'El cliente no ha mostrado intención de compra o reserva en la conversación. No registres un cierre de venta: primero aclara qué quiere el cliente.'
+    );
+  }
+  const datos = [];
+  if (args.nombre) datos.push('nombre');
+  if (args.telefono) datos.push('teléfono');
+  if (args.email) datos.push('correo');
+  if (datos.length === 0) {
+    return blocked(
+      'sin_datos_cliente',
+      'Faltan los datos del cliente (nombre y al menos teléfono o correo). Pide SOLO los datos que faltan antes de cerrar la venta.'
+    );
+  }
+  if (args.email && !textHasEmail(ctx.userText, args.email)) {
+    return blocked(
+      'correo_inventado',
+      `El correo "${args.email}" no aparece en la conversación. Confírmalo con el cliente antes de cerrar la venta.`
+    );
+  }
+  if (args.telefono && !PHONE_RE.test(String(args.telefono))) {
+    return blocked(
+      'telefono_invalido',
+      `El teléfono "${args.telefono}" no parece un número válido. Confirma el número con el cliente.`
+    );
+  }
+  return allowed();
+}
+
+function validateBudget(args, ctx) {
+  const text = ctx.text;
+  const np = args.numPersonas;
+  const na = args.numAdultos;
+  const nm = args.numMenores;
+  if (Number.isFinite(na) && Number.isFinite(nm) && Number.isFinite(np) && na + nm !== np) {
+    return blocked(
+      'datos_inconsistentes',
+      `Los datos no cuadran: ${na} adultos + ${nm} menores ≠ ${np} personas. Pregunta al cliente el número correcto de personas.`
+    );
+  }
+  const totals = extractPeopleTotals(text);
+  if (Number.isFinite(np) && totals.length > 0 && !totals.includes(np)) {
+    return blocked(
+      'num_personas_incoherente',
+      `En la conversación se mencionaron ${totals.join(' o ')} personas, pero el cálculo usa ${np}. Confirma el número real con el cliente.`
+    );
+  }
+  return allowed();
+}
+
+// Funciones con efectos secundarios: se validan contra la conversación.
+// Las de solo lectura no están en este mapa y se permiten siempre.
+const TOOL_VALIDATORS = {
+  enviar_correo_informacion: validateEmailRequest,
+  comunicar_asesor: validateAdvisorRequest,
+  iniciar_cierre_venta: validateCloseSale,
+  calcular_presupuesto: validateBudget,
+};
+
+/** Valida la coherencia de una calling function contra la conversación. */
+function validateToolCall(name, args, messages) {
+  const fn = TOOL_VALIDATORS[name];
+  if (!fn) return allowed();
+  return fn(args || {}, buildContext(messages));
+}
+
 // ─── Catálogo de funciones (para configuración por bot) ───────────────────
 
 const FUNCTION_CATALOG = [
@@ -349,4 +559,4 @@ const FUNCTION_CATALOG = [
   },
 ];
 
-module.exports = { TOOLS, FUNCTION_MAP, FUNCTION_CATALOG };
+module.exports = { TOOLS, FUNCTION_MAP, FUNCTION_CATALOG, validateToolCall };

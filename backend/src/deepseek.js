@@ -6,7 +6,7 @@ const {
   sendClientEmail,
 } = require('./escalation');
 const { getSettings } = require('./settings');
-const { TOOLS, FUNCTION_MAP } = require('./functions');
+const { TOOLS, FUNCTION_MAP, validateToolCall } = require('./functions');
 
 /**
  * Devuelve las tools habilitadas para un bot (según settings.enabledFunctions).
@@ -115,7 +115,7 @@ async function searchKnowledge(query, botId) {
  * Call DeepSeek with optional function calling.
  * If the model returns tool_calls, execute them and call again with results.
  */
-async function callDeepSeek(messages, tools = null, attempt = 1, botId) {
+async function callDeepSeek(messages, tools = null, attempt = 1, botId, conversation = []) {
   const { temperature, maxTokens, model } = await getSettings(botId);
   // Escala: primer intento = maxTokens; 2º = x1.7; 3º = x2.5
   const tokens = Math.round(maxTokens * (attempt === 1 ? 1 : attempt === 2 ? 1.7 : 2.5));
@@ -135,7 +135,7 @@ async function callDeepSeek(messages, tools = null, attempt = 1, botId) {
   // If response was truncated, retry with more tokens
   if (finishReason === 'length' && attempt < 3 && msg.content && !msg.tool_calls) {
     console.log(`⚠️  Respuesta truncada (${msg.content.length} chars), reintentando con más tokens...`);
-    return callDeepSeek(messages, tools, attempt + 1, botId);
+    return callDeepSeek(messages, tools, attempt + 1, botId, conversation);
   }
 
   // Handle function calling — multi-round: ejecuta tools y hace follow-up hasta
@@ -154,19 +154,47 @@ async function callDeepSeek(messages, tools = null, attempt = 1, botId) {
       const toolResults = [];
       for (const toolCall of currentMsg.tool_calls) {
         const fn = FUNCTION_MAP[toolCall.function.name];
-        if (fn) {
-          const args = JSON.parse(toolCall.function.arguments || '{}');
-          const result = await fn(args, botId); // await soporta funciones async (ej. enviar_correo_informacion)
-          console.log(`  → ${toolCall.function.name}(${JSON.stringify(args)}) = ${JSON.stringify(result).substring(0, 120)}`);
-          if (toolCall.function.name === 'enviar_correo_informacion' && result?.ok) emailSent = true;
-          if (result?._escalate && !escalate) escalate = result.lead || {};
-          const toolContent = JSON.stringify(result ?? {
-            ok: false,
-            mensaje: 'Datos no configurados. Extrae la información del contexto disponible.',
-          });
+
+        // Parseo seguro: el modelo puede emitir JSON inválido en "arguments"
+        let args = {};
+        try {
+          args = JSON.parse(toolCall.function.arguments || '{}');
+        } catch (e) {
+          args = { _parseError: true };
+        }
+
+        if (!fn) {
+          // Función desconocida: devolver error al modelo en vez de ignorarla
+          const toolContent = JSON.stringify({ ok: false, mensaje: `La función "${toolCall.function.name}" no está disponible para este bot.` });
           toolResults.push({ role: 'tool', tool_call_id: toolCall.id, content: toolContent });
           allToolResults.push({ name: toolCall.function.name, content: toolContent });
+          continue;
         }
+
+        // ═══ Validación de coherencia con la conversación ═══
+        // Antes de ejecutar (sobre todo acciones con efectos secundarios:
+        // correo, asesor, cierre de venta) se verifica que la solicitud tenga
+        // respaldo en lo que el cliente dijo. Si no lo tiene, NO se ejecuta:
+        // el modelo recibe un mensaje para pedir confirmación o datos faltantes.
+        const validation = validateToolCall(toolCall.function.name, args, conversation);
+        if (!validation.ok) {
+          console.log(`  ⛔ [${toolCall.function.name}] bloqueada: ${validation.reason}`);
+          const toolContent = JSON.stringify({ ok: false, mensaje: validation.message });
+          toolResults.push({ role: 'tool', tool_call_id: toolCall.id, content: toolContent });
+          allToolResults.push({ name: toolCall.function.name, content: toolContent });
+          continue;
+        }
+
+        const result = await fn(args, botId);
+        console.log(`  → ${toolCall.function.name}(${JSON.stringify(args)}) = ${JSON.stringify(result).substring(0, 120)}`);
+        if (toolCall.function.name === 'enviar_correo_informacion' && result?.ok) emailSent = true;
+        if (result?._escalate && !escalate) escalate = result.lead || {};
+        const toolContent = JSON.stringify(result ?? {
+          ok: false,
+          mensaje: 'Datos no configurados. Extrae la información del contexto disponible.',
+        });
+        toolResults.push({ role: 'tool', tool_call_id: toolCall.id, content: toolContent });
+        allToolResults.push({ name: toolCall.function.name, content: toolContent });
       }
 
       // Send results back for the model to continue
@@ -424,7 +452,7 @@ async function chatWithDeepSeek(userMessage, userName = 'Usuario', userId = 'unk
   let escalated = false;
   let emailSent = false;
   try {
-    const msg = await callDeepSeek(messages, await getToolsForBot(botId), 1, botId);
+    const msg = await callDeepSeek(messages, await getToolsForBot(botId), 1, botId, historySnapshot);
     content = (msg.content || '')
       // Limpiar cualquier XML de function-call filtrado en el texto de respuesta
       .replace(/<function_calls>[\s\S]*?<\/function_calls>/gi, '')
