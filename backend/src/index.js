@@ -14,7 +14,9 @@ const app = express();
 
 // ─── CORS ───────────────────────────────────────────────────────────────
 app.use(cors({ origin: '*' }));
-app.use(express.json());
+// Límite alto para JSON: settings grandes (systemPrompt, itinerarios), webhook
+// de Meta y payloads con contenido extenso superan fácilmente los 100 KB default.
+app.use(express.json({ limit: '50mb' }));
 
 // ─── Request logging ────────────────────────────────────────────────────
 app.use((req, res, next) => {
@@ -177,7 +179,7 @@ async function knowledgeProxy(method, url, options = {}) {
   throw lastError;
 }
 
-// Mensaje de error con la URL intentada, para diagnóstico rápido (legacy)
+// Mensaje de error con la URL intentada, para diagnóstico rápido
 function knowledgeError(url) {
   return `Knowledge service unreachable (${KNOWLEDGE_URL}${url})`;
 }
@@ -239,9 +241,11 @@ app.post('/ingest', async (req, res) => {
 
     res.json(data);
   } catch (e) {
-    console.error('Upload error:', e.response?.data || e.message);
-    const upstream = e.response?.data?.detail || e.message;
-    res.status(502).json({ error: upstream || knowledgeError('/ingest') });
+    const status = e.response?.status || 'network';
+    const data = e.response?.data;
+    const detail = typeof data === 'string' ? data : (data && (data.detail || data.error)) || e.message;
+    console.error(`Upload error (knowledge ${status}): ${detail}`);
+    res.status(502).json({ error: detail || knowledgeError('/ingest') });
   }
 });
 
@@ -441,9 +445,11 @@ app.post('/bots/:id/knowledge/upload', async (req, res) => {
       : { ...data, warning: 'Archivo procesado pero no disponible para descarga (supera el límite de 10 MB de Cloudinary).' };
     res.json(msg);
   } catch (e) {
-    console.error('Upload error:', e.response?.data || e.message);
-    const upstream = e.response?.data?.detail || e.message;
-    res.status(502).json({ error: upstream || knowledgeError('/ingest') });
+    const status = e.response?.status || 'network';
+    const data = e.response?.data;
+    const detail = typeof data === 'string' ? data : (data && (data.detail || data.error)) || e.message;
+    console.error(`Upload error (knowledge ${status}): ${detail}`);
+    res.status(502).json({ error: detail || knowledgeError('/ingest') });
   }
 });
 

@@ -104,8 +104,10 @@ async function searchKnowledge(query, botId) {
     );
     return data.results || [];
   } catch (err) {
-    console.warn('Knowledge search fallback:', err.message);
-    return [];
+    const status = err.response?.status;
+    const detail = err.response?.data?.detail ?? err.response?.data?.error ?? err.message;
+    console.warn(`Knowledge search fallback (${status || 'network'}): ${typeof detail === 'string' ? detail : JSON.stringify(detail)}`);
+    return null; // null = knowledge-service no disponible (≠ “no hay chunks en la DB”)
   }
 }
 
@@ -303,10 +305,17 @@ async function chatWithDeepSeek(userMessage, userName = 'Usuario', userId = 'unk
   }
 
   // 1. Retrieve relevant knowledge
+  // null = el knowledge-service no respondió; no debe tratarse como “base vacía”
+  let knowledgeUnavailable = false;
   try {
     relevantChunks = await searchKnowledge(userMessage, botId);
+    if (relevantChunks === null) {
+      relevantChunks = [];
+      knowledgeUnavailable = true;
+    }
   } catch (err) {
     console.error('Search error:', err.message);
+    knowledgeUnavailable = true;
   }
 
   // ── Negative-response tracking (offers an advisor after N unclear answers) ──
@@ -392,7 +401,8 @@ async function chatWithDeepSeek(userMessage, userName = 'Usuario', userId = 'unk
   }
 
   // ═══ Validation layer: avisar si la base de conocimiento está vacía ═══
-  if (relevantChunks.length === 0) {
+  // (solo cuando el knowledge-service respondió: si está caído, no es “base vacía”)
+  if (relevantChunks.length === 0 && !knowledgeUnavailable) {
     messages[messages.length - 1].content +=
       '\n\n⚠️ AVISO IMPORTANTE: La base de conocimiento está VACÍA (no se ha cargado ningún documento).\n' +
       'Responde ÚNICAMENTE usando los resultados de las funciones habilitadas.\n' +
@@ -427,7 +437,8 @@ async function chatWithDeepSeek(userMessage, userName = 'Usuario', userId = 'unk
     //      Excepción: si ya hubo tool calls exitosos (p.ej. calcular_presupuesto),
     //      los datos vienen del sistema y NO son inventados.
     const dataPreviouslyVerified = msg._emailSent || (msg._toolResults && msg._toolResults.filter(t => t.content && !t.content.includes('"ok":false')).length > 0);
-    if (relevantChunks.length === 0 && content && !escalated && !emailSent && !dataPreviouslyVerified) {
+    // El bloqueo solo aplica si el knowledge-service respondió y confirmó que no hay chunks
+    if (relevantChunks.length === 0 && !knowledgeUnavailable && content && !escalated && !emailSent && !dataPreviouslyVerified) {
       const looksLikeKnowledge = (
         /\$[\d,]+/.test(content) ||           // menciona precios
         /\d{1,2}\s*(de|th|rd)\s/.test(content) ||  // menciona fechas
