@@ -112,6 +112,65 @@ async function searchKnowledge(query, botId) {
 }
 
 /**
+ * Comando dev:context — lista la base de conocimiento del bot (fuentes + preview).
+ * Consulta la DB directamente (no depende del knowledge-service).
+ */
+async function buildContextDump(botId) {
+  const { query } = require('./db');
+  const { rows } = await query(
+    `SELECT s.id, s.title, s.original_filename, s.source_type, s.status, s.error_message,
+            count(c.id)::int AS chunks,
+            (SELECT c2.content FROM knowledge_chunks c2
+               JOIN knowledge_documents d2 ON d2.id = c2.document_id
+              WHERE d2.source_id = s.id
+              ORDER BY c2.chunk_index LIMIT 1) AS preview
+       FROM knowledge_sources s
+       LEFT JOIN knowledge_documents d ON d.source_id = s.id
+       LEFT JOIN knowledge_chunks c ON c.document_id = d.id
+      WHERE s.bot_id IS NOT DISTINCT FROM $1
+      GROUP BY s.id, s.title, s.original_filename, s.source_type, s.status, s.error_message, s.created_at
+      ORDER BY s.created_at DESC`,
+    [botId || null]
+  );
+
+  if (rows.length === 0) {
+    return '🧠 Este bot no tiene fuentes de conocimiento cargadas.\n\nSube documentos en el panel para que pueda responder con información real.';
+  }
+
+  const STATUS_ICON = { completed: '✅', failed: '❌', pending: '⏳', extracting: '🔄', chunking: '🔄', embedding: '🧠' };
+  const MAX_TOTAL = 3800; // límite de WhatsApp es 4096
+  const MAX_PREVIEW = 160;
+  const MAX_SOURCES = 15;
+  const plural = (n, s) => `${n} ${s}${n === 1 ? '' : 's'}`;
+
+  const totalChunks = rows.reduce((a, r) => a + (r.chunks || 0), 0);
+  const lines = [`🧠 Base de conocimiento del bot (${plural(rows.length, 'fuente')}, ${plural(totalChunks, 'chunk')}):`, ''];
+  let included = 0;
+
+  for (const r of rows) {
+    if (included >= MAX_SOURCES) {
+      lines.push(`… y ${rows.length - included} fuentes más (revisa el panel para el detalle).`);
+      break;
+    }
+    const icon = STATUS_ICON[r.status] || '🟡';
+    const name = r.title || r.original_filename || '(sin título)';
+    const file = r.original_filename && r.original_filename !== name ? ` [${r.original_filename}]` : '';
+    let block = `${icon} ${name}${file} — ${plural(r.chunks || 0, 'chunk')}`;
+    if (r.status === 'failed' && r.error_message) block += ` (${r.error_message.slice(0, 80)})`;
+    if (r.preview) block += `\n   "${String(r.preview).replace(/\s+/g, ' ').slice(0, MAX_PREVIEW)}…"`;
+    const remaining = MAX_TOTAL - lines.join('\n').length;
+    if (remaining < block.length) {
+      lines.push(`… y ${rows.length - included} fuentes más (revisa el panel para el detalle).`);
+      break;
+    }
+    lines.push(block, '');
+    included++;
+  }
+
+  return lines.join('\n').trim();
+}
+
+/**
  * Call DeepSeek with optional function calling.
  * If the model returns tool_calls, execute them and call again with results.
  */
@@ -311,6 +370,20 @@ Responde ÚNICAMENTE con una palabra: "SI" si la respuesta inventa datos concret
  */
 async function chatWithDeepSeek(userMessage, userName = 'Usuario', userId = 'unknown', botId) {
   let relevantChunks = [];
+
+  // ── Comando dev:context — entrega la base de conocimiento del bot ──
+  if (typeof userMessage === 'string' && userMessage.trim().toLowerCase() === 'dev:context') {
+    try {
+      const answer = await buildContextDump(botId);
+      return { answer, chunks: [], escalated: false };
+    } catch (err) {
+      console.error('dev:context falló:', err.message);
+      return {
+        answer: '⚠️ No pude leer la base de conocimiento: ' + err.message,
+        chunks: [], escalated: false,
+      };
+    }
+  }
 
   // ── Conversation memory (per bot) ─────────────────────────────────
   const convKey = `${botId || 'global'}::${userId}`;
