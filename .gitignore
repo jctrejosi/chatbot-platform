@@ -1,4 +1,11 @@
+# Secretos y entorno local — nunca commitear
 .env
-.env
+.env.local
+.env.*.local
+
+# Archivos temporales de diagnóstico
+.tmp-*
+
+# Logs
 logs/
 logs-prod/
