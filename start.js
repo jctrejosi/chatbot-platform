@@ -75,6 +75,9 @@ const pullDb = process.argv.includes('--pull-db');
 const ksDocker = process.argv.includes('--ks-docker');
 const pullLogs = process.argv.includes('--pull-logs');
 const prodUrlArg = process.argv.includes('--prod-url') ? process.argv[process.argv.indexOf('--prod-url') + 1] : undefined;
+const serviceIdsArg = process.argv.includes('--service')
+  ? (process.argv[process.argv.indexOf('--service') + 1] || '').split(',').map((s) => s.trim()).filter(Boolean)
+  : [];
 
 // ¿Ejecutamos dentro del terminal integrado de Zed? (un script no puede
 // abrir paneles de terminal ahí, así que en ese caso imprimimos comandos
@@ -934,7 +937,8 @@ async function pullRenderLogs(renderKey, outDir) {
   if (!ownerId) {
     try {
       const owners = await httpGetJson(`${base}/owners`, { headers });
-      ownerId = Array.isArray(owners) ? owners[0]?.id : undefined;
+      // La API devuelve [{ cursor, owner: { id, ... } }]
+      ownerId = Array.isArray(owners) ? owners[0]?.owner?.id : undefined;
     } catch { /* se informa abajo */ }
     if (!ownerId) {
       error('pull-logs', 'No pude determinar el ownerId. Definí RENDER_OWNER_ID (o RENDER_API_KEY con acceso al workspace).');
@@ -943,19 +947,33 @@ async function pullRenderLogs(renderKey, outDir) {
     }
   }
 
-  // 2) Servicios de interés (backend + knowledge-service).
+  // 2) Servicios: los pasados con --service, o auto-descubiertos por nombre.
   let targets = [];
-  try {
-    const services = await httpGetJson(`${base}/services`, { headers });
-    const wanted = new Set(['whatsapp-bot', 'knowledge-service']);
-    targets = (Array.isArray(services) ? services : []).filter((s) => wanted.has(s.name));
-  } catch (e) {
-    error('pull-logs', `No se pudo listar servicios de Render: ${e.message}`);
-    process.exitCode = 1;
-    return;
+  if (serviceIdsArg.length) {
+    for (const id of serviceIdsArg) {
+      let name = id;
+      try {
+        const svc = await httpGetJson(`${base}/services/${encodeURIComponent(id)}`, { headers });
+        if (svc?.name) name = svc.name;
+      } catch { /* usamos el id como nombre */ }
+      targets.push({ id, name });
+    }
+  } else {
+    try {
+      const services = await httpGetJson(`${base}/services`, { headers });
+      const wanted = new Set(['whatsapp-bot', 'knowledge-service', 'chatbot-platform']);
+      // La lista devuelve [{ cursor, service: { id, name, ... } }]
+      targets = (Array.isArray(services) ? services : [])
+        .map((s) => s.service || s)
+        .filter((s) => s && wanted.has(s.name));
+    } catch (e) {
+      error('pull-logs', `No se pudo listar servicios de Render: ${e.message}`);
+      process.exitCode = 1;
+      return;
+    }
   }
   if (targets.length === 0) {
-    error('pull-logs', 'No encontré los servicios "whatsapp-bot" / "knowledge-service" en Render.');
+    error('pull-logs', 'No encontré los servicios. Pasalos con --service <id> (p. ej. --service srv-d9obgg8ae00c73b4g8og) o con una RENDER_API_KEY con acceso.');
     process.exitCode = 1;
     return;
   }
@@ -988,12 +1006,16 @@ async function pullRenderLogs(renderKey, outDir) {
     return;
   }
 
-  // 4) Guardar: por servicio si la entrada trae resource/resourceName, si no, combinado.
+  // 4) Guardar: agrupar por servicio (el resource viene en labels[]).
   const byId = new Map(targets.map((s) => [s.id, s.name]));
+  const logLabel = (e, name) => {
+    const lbl = (Array.isArray(e?.labels) ? e.labels : []).find((l) => l?.name === name);
+    return lbl ? lbl.value : undefined;
+  };
   const groups = new Map();
   for (const e of all) {
-    const rid = e.resource || e.resourceId;
-    const name = (rid && byId.get(rid)) || e.resourceName || 'render';
+    const rid = logLabel(e, 'resource');
+    const name = (rid && byId.get(rid)) || 'render';
     if (!groups.has(name)) groups.set(name, []);
     groups.get(name).push(e);
   }
@@ -1001,10 +1023,10 @@ async function pullRenderLogs(renderKey, outDir) {
 
   let total = 0;
   for (const [name, list] of groups) {
-    const safe = name === 'whatsapp-bot' ? 'backend' : name === 'knowledge-service' ? 'knowledge-service' : 'render';
+    const safe = name === 'whatsapp-bot' || name === 'chatbot-platform' ? 'backend' : name === 'knowledge-service' ? 'knowledge-service' : name.replace(/[^a-zA-Z0-9_-]/g, '_') || 'render';
     const lines = list.map((e) => {
       const ts = e.timestamp ?? '';
-      const lvl = e.level ?? e.type ?? 'info';
+      const lvl = logLabel(e, 'level') || 'info';
       const msg = typeof e.message === 'string' ? e.message : JSON.stringify(e);
       return `[${ts}] [${String(lvl).toUpperCase()}] ${msg}`;
     });
