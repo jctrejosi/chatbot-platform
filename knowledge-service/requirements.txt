@@ -23,3 +23,7 @@ python-dotenv==1.2.2
 pymupdf
 pymupdf_layout
 pdfplumber
+
+# Requisito de SISTEMA (no pip) para extraer "cualquier documento" (.doc, .ppt, .pages, .epub…):
+#   Debian/Ubuntu: sudo apt install libreoffice
+#   Docker:        imagen con LibreOffice o apt-get install libreoffice-core libreoffice-writer libreoffice-calc libreoffice-impress

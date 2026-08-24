@@ -70,6 +70,7 @@ const reload = !process.argv.includes('--no-reload');
 const stop = process.argv.includes('--stop');
 const forceExternal = process.argv.includes('--external');
 const pullDb = process.argv.includes('--pull-db');
+const ksDocker = process.argv.includes('--ks-docker');
 
 // ¿Ejecutamos dentro del terminal integrado de Zed? (un script no puede
 // abrir paneles de terminal ahí, así que en ese caso imprimimos comandos
@@ -423,7 +424,7 @@ function openLogsTerminals() {
   const sources = [
     { title: 'backend', cmd: tailLog('backend.log') },
     { title: 'chat-web', cmd: tailLog('chat-web.log') },
-    { title: 'knowledge-service', cmd: tailLog('knowledge-service.log') },
+    ...(ksDocker ? [] : [{ title: 'knowledge-service', cmd: tailLog('knowledge-service.log') }]),
     { title: 'db', cmd: tailLog('db.log') },
   ];
 
@@ -537,6 +538,10 @@ async function main() {
     `${BOLD}${GREEN}Montando servicios${RESET} ${DIM}(${reload ? 'hot-reload ON' : 'hot-reload OFF'})${RESET}\n`,
   );
 
+  // ── knowledge-service: en Docker (--ks-docker) o con .venv local ──
+  if (ksDocker) {
+    console.log(`${COLORS['knowledge-service']}[knowledge-service]${RESET} corriendo en Docker (--ks-docker): se omite el .venv y uvicorn local.`);
+  } else {
   // ── knowledge-service: asegurar un .venv funcional ──
   //   - Si existe, tiene uvicorn/fastapi y el marcador .deps-ok → usarlo tal cual.
   //   - Si existe y tiene uvicorn/fastapi pero falta el marcador → la instalación
@@ -625,6 +630,7 @@ async function main() {
 
   ks.args = ['-m', 'uvicorn', 'main:app', '--port', process.env.KNOWLEDGE_PORT || '8000'];
   if (reload) ks.args.splice(2, 0, '--reload');
+  }
 
   // ── Preflight ──
   for (const s of services) {
@@ -635,6 +641,9 @@ async function main() {
   }
   if (!fs.existsSync(path.join(ROOT, 'backend', '.env'))) {
     warn('backend', 'No hay .env en backend/ (se usan defaults; revisa backend/.env.example)');
+  }
+  if (!ksDocker && !commandExists('libreoffice') && !commandExists('soffice')) {
+    warn('knowledge-service', 'LibreOffice no está instalado: los formatos raros (.doc, .ppt, .pages, .epub…) no se extraerán. Instálalo con: sudo apt install libreoffice, o corre el knowledge-service en Docker con --ks-docker');
   }
   if (!fs.existsSync(path.join(ROOT, 'knowledge-service', '.env'))) {
     warn('knowledge-service', 'No hay .env en knowledge-service/ (revisa knowledge-service/.env.example)');
@@ -652,6 +661,7 @@ async function main() {
   fs.rmSync(PID_FILE, { force: true });
   const mounted = [];
   for (const service of services) {
+    if (ksDocker && service.name === 'knowledge-service') continue;
     await freePort(service.port, service.name);
     mounted.push({ service, ...mount(service) });
   }
@@ -692,12 +702,12 @@ async function main() {
       ? 'Logs → pega en paneles de Zed los comandos de arriba (o tail -n 100 -f logs/*.log)'
       : 'Logs → se abrieron 4 terminales; también queda todo en logs/*.log';
 
-  const pidOf = (name) => mounted.find((m) => m.service.name === name).pid;
+  const pidOf = (name) => mounted.find((m) => m.service.name === name)?.pid;
   console.log(`
 ${BOLD}Servicios montados en background:${RESET}
   ${GREEN}backend${RESET}            → ${BOLD}http://localhost:${BACKEND_PORT}${RESET}  ${DIM}(PID ${pidOf('backend')})${RESET}
   ${GREEN}chat-web${RESET}           → ${BOLD}http://localhost:${WEB_PORT}${RESET}  ${DIM}(PID ${pidOf('chat-web')})${RESET}
-  ${GREEN}knowledge-service${RESET}  → ${BOLD}http://localhost:${KNOWLEDGE_PORT}${RESET}  ${DIM}(PID ${pidOf('knowledge-service')})${RESET}
+  ${GREEN}knowledge-service${RESET}  → ${BOLD}http://localhost:${KNOWLEDGE_PORT}${RESET}  ${DIM}${ksDocker ? '(Docker)' : `(PID ${pidOf('knowledge-service')})`}${RESET}
   ${DIM}db (contenedor)     → logs/db.log  (docker logs -f en background)${RESET}
   ${DIM}DB (si hace falta) → cd db && docker compose up -d${RESET}
 

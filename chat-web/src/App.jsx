@@ -210,7 +210,7 @@ function ChatPanel({ online, botId, botName, checking, onRetry, error, hasBots, 
 /* ─── Upload Panel ────────────────────── */
 // Formatos aceptados para subir a knowledge-service (coinciden con el
 // extractor multi-formato del backend: PDF, DOCX, PPTX, XLSX, texto, etc.)
-const UPLOAD_ACCEPT = '.pdf,.docx,.pptx,.xlsx,.xls,.csv,.txt,.md,.html,.json,.xml,.yaml,.yml,.py,.js,.ts,.java,.cpp,.odt,.ods,.odp,.rtf';
+const UPLOAD_ACCEPT = '.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.csv,.tsv,.txt,.md,.rtf,.odt,.ods,.odp,.epub,.mht,.mhtml,.msg,.pages,.numbers,.key,.html,.json,.xml,.yaml,.yml,.py,.js,.ts,.jsx,.tsx,.java,.cpp,.c,.h,.go,.rs,.php,.rb,.sh,.sql,.toml,.ini,.css,.tex,.log,.rst';
 const UPLOAD_EXTENSIONS = UPLOAD_ACCEPT.split(',').map((s) => s.trim().toLowerCase());
 
 function isSupportedUpload(file) {
@@ -1008,7 +1008,7 @@ function SettingsPanel({ open, onClose, botId, botName, botIcon, creating, onCre
               <div className="settings-section">
                 <label className="btn btn-primary btn-block" style={{ cursor: 'pointer', textAlign: 'center', display: 'block' }}>
                   {uploading ? '⏳ Subiendo...' : creating ? '📤 Subir archivo (se creará el bot automáticamente)' : '📤 Subir archivo'}
-                  <input type="file" accept=".pdf,.docx,.pptx,.xlsx,.xls,.csv,.txt,.md,.html,.json,.xml,.yaml,.yml,.py,.js,.ts,.java,.cpp,.odt,.ods,.odp,.rtf" style={{ display: 'none' }} onChange={handleUpload} disabled={uploading} />
+                  <input type="file" accept={UPLOAD_ACCEPT} style={{ display: 'none' }} onChange={handleUpload} disabled={uploading} />
                 </label>
               </div>
               <div className="settings-section">

@@ -55,41 +55,115 @@ ARCHIVE_EXTENSIONS = {'.zip'}
 
 
 def extract_file_bytes(data: bytes, filename: str) -> ExtractionResult:
-    """Extract text from uploaded file bytes, auto-detecting the format."""
+    """Extract text from uploaded file bytes, auto-detecting the format.
+
+    Pipeline:
+      1. Extractores específicos (PDF, DOCX, PPTX, XLSX, XLS, ODF, RTF, CSV, ZIP).
+      2. Texto plano / código (no pasa por LibreOffice).
+      3. LibreOffice headless como comodín universal (.doc, .ppt, .pages, .epub, .msg…).
+      4. Último recurso: texto crudo.
+    """
     ext = os.path.splitext(filename)[1].lower()
 
-    if ext == '.pdf':
-        return _extract_pdf_bytes(data)
+    # 1. Extractores específicos (si uno falla, se reintenta con LibreOffice).
+    try:
+        if ext == '.pdf':
+            return _extract_pdf_bytes(data)
+        if ext in DOCX_EXTENSIONS:
+            return _extract_docx(data)
+        if ext in PPTX_EXTENSIONS:
+            return _extract_pptx(data)
+        if ext in XLSX_EXTENSIONS:
+            return _extract_xlsx(data)
+        if ext == '.xls':
+            return _extract_xls(data)
+        if ext in ODF_EXTENSIONS:
+            return _extract_odf(data)
+        if ext in RTF_EXTENSIONS:
+            return _extract_rtf(data)
+        if ext in ARCHIVE_EXTENSIONS:
+            return _extract_archive(data, filename)
+        if ext in STRUCTURED_TEXT_EXTENSIONS:
+            return _extract_csv_text(data, filename)
+    except Exception as exc:
+        print(f'  ⚠️ El extractor de "{ext}" falló ({exc}); se reintenta con LibreOffice.')
 
-    if ext in DOCX_EXTENSIONS:
-        return _extract_docx(data)
+    # 2. Texto plano / código: directo, sin pasar por LibreOffice.
+    if ext in PLAIN_TEXT_EXTENSIONS:
+        return _extract_plain_text(data, filename)
 
-    if ext in PPTX_EXTENSIONS:
-        return _extract_pptx(data)
+    # 3. LibreOffice: comodín universal para todo lo demás.
+    result = _extract_libreoffice(data, filename)
+    if result is not None:
+        return result
 
-    if ext in XLSX_EXTENSIONS:
-        return _extract_xlsx(data)
-
-    if ext == '.xls':
-        return _extract_xls(data)
-
-    if ext in ODF_EXTENSIONS:
-        return _extract_odf(data)
-
-    if ext in RTF_EXTENSIONS:
-        return _extract_rtf(data)
-
-    if ext in ARCHIVE_EXTENSIONS:
-        return _extract_archive(data, filename)
-
-    if ext in STRUCTURED_TEXT_EXTENSIONS:
-        return _extract_csv_text(data, filename)
-
+    # 4. Último recurso: texto crudo.
     if ext in LEGACY_BINARY_EXTENSIONS:
         return _extract_plain_text(data, filename, note='formato binario legado — texto crudo')
-
-    # All other text-based formats (code, data, web, etc.)
     return _extract_plain_text(data, filename)
+
+
+# ─── LibreOffice headless: comodín universal ───────────────────────────────
+
+def _find_soffice():
+    """Localiza el binario de LibreOffice (libreoffice o soffice) en el PATH."""
+    import shutil
+    for name in ('libreoffice', 'soffice'):
+        found = shutil.which(name)
+        if found:
+            return found
+    return None
+
+
+def _extract_libreoffice(data: bytes, filename: str):
+    """Convierte cualquier documento a PDF con LibreOffice headless y extrae el texto.
+
+    Soporta la mayoría de formatos de documento (.doc, .ppt, .pages, .numbers,
+    .key, .epub, .msg, .mht, etc.). Devuelve None si LibreOffice no está
+    instalado o la conversión falla (el llamador cae al último recurso).
+    """
+    soffice = _find_soffice()
+    if soffice is None:
+        return None
+
+    import subprocess
+    import tempfile
+
+    base = os.path.basename(filename or 'documento.bin') or 'documento.bin'
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, base)
+            with open(src, 'wb') as f:
+                f.write(data)
+
+            # Perfil aislado por ejecución: evita locks y errores de perfil en
+            # contenedores/servidores (HOME no escribible, etc.).
+            profile = os.path.join(tmp, 'lo_profile')
+            try:
+                subprocess.run(
+                    [soffice, '--headless', '--norestore', '--nolockcheck',
+                     f'-env:UserInstallation=file://{profile}',
+                     '--convert-to', 'pdf', '--outdir', tmp, src],
+                    check=True,
+                    capture_output=True,
+                    timeout=120,
+                )
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+                print(f'  ⚠️ LibreOffice no convirtió "{base}": {exc}')
+                return None
+
+            pdf_path = os.path.splitext(src)[0] + '.pdf'
+            if not os.path.exists(pdf_path):
+                print(f'  ⚠️ LibreOffice no generó PDF para "{base}"')
+                return None
+
+            with open(pdf_path, 'rb') as f:
+                pdf_data = f.read()
+    except Exception as exc:
+        print(f'  ⚠️ LibreOffice falló para "{base}": {exc}')
+        return None
+
+    return _extract_pdf_bytes(pdf_data)
 
 
 # ─── PDF: pipeline inteligente que elige el mejor extractor ─────────────
