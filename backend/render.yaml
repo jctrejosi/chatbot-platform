@@ -1,3 +1,6 @@
+# ⚠️ OBSOLETO para despliegue: reemplazado por el render.yaml de la raíz
+# (backend + knowledge-service en un solo servicio Docker). Se conserva como
+# referencia del despliegue anterior por separado.
 services:
   - type: web
     name: whatsapp-bot

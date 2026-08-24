@@ -1,3 +1,4 @@
 .env
 .env
 logs/
+logs-prod/

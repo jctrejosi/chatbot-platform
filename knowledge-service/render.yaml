@@ -1,3 +1,5 @@
+# ⚠️ OBSOLETO para despliegue: reemplazado por el render.yaml de la raíz
+# (backend + knowledge-service en un solo servicio Docker).
 services:
   - type: web
     name: knowledge-service

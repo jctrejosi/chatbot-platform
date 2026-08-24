@@ -1,0 +1,64 @@
+# Despliegue CONSOLIDADO: backend + knowledge-service en UN solo servicio.
+# Sustituye a backend/render.yaml y knowledge-service/render.yaml.
+#
+# Builds: Dockerfile (Node + Python + LibreOffice headless)
+# Runtime: deploy/start.sh arranca el knowledge-service (:8000, interno) y el
+# backend en $PORT. El backend llama al knowledge-service en localhost:8000.
+services:
+  - type: web
+    name: whatsapp-bot
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: KNOWLEDGE_SERVICE_URL
+        value: http://localhost:8000
+      - key: DEEPSEEK_API_KEY
+        sync: false
+      - key: DEEPSEEK_MODEL
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: PUBLIC_BASE_URL
+        sync: false
+      - key: WHATSAPP_APP_ID
+        sync: false
+      - key: WHATSAPP_APP_SECRET
+        sync: false
+      - key: WHATSAPP_WABA_ID
+        sync: false
+      - key: WHATSAPP_PHONE
+        sync: false
+      - key: WHATSAPP_PHONE_NUMBER_ID
+        sync: false
+      - key: WHATSAPP_ACCESS_TOKEN
+        sync: false
+      - key: WHATSAPP_VERIFY_TOKEN
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RESEND_SENDER_EMAIL
+        sync: false
+      - key: ESCALATION_EMAIL
+        sync: false
+      - key: MIN_CONFIDENCE
+        sync: false
+      - key: MAX_NEGATIVE_RESPONSES
+        sync: false
+      - key: MAX_TOKENS
+        sync: false
+      - key: MAX_HISTORY_MESSAGES
+        sync: false
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+      - key: EMBEDDING_PROVIDER
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false

@@ -13,6 +13,8 @@
  *   node start.js                 monta los servicios y abre una terminal de logs por servicio
  *   node start.js --stop          detiene los servicios (mata lo que ocupe sus puertos)
  *   node start.js --pull-db       trae TODOS los datos de producción (Supabase) a la base local
+ *   node start.js --pull-logs     baja los logs del backend de producción a logs-prod/ (--prod-url <url>)
+ *   node start.js --ks-docker     knowledge-service ya corre en Docker (no lo monta en el host)
  *   node start.js --no-reload     desactiva hot-reload de los 3 servicios
  *   node start.js --external      fuerza ventanas de terminal del sistema aunque estés en Zed
  *
@@ -71,6 +73,8 @@ const stop = process.argv.includes('--stop');
 const forceExternal = process.argv.includes('--external');
 const pullDb = process.argv.includes('--pull-db');
 const ksDocker = process.argv.includes('--ks-docker');
+const pullLogs = process.argv.includes('--pull-logs');
+const prodUrlArg = process.argv.includes('--prod-url') ? process.argv[process.argv.indexOf('--prod-url') + 1] : undefined;
 
 // ¿Ejecutamos dentro del terminal integrado de Zed? (un script no puede
 // abrir paneles de terminal ahí, así que en ese caso imprimimos comandos
@@ -138,6 +142,34 @@ async function waitForHttp(url, { timeoutMs = 60000, retryMs = 500 } = {}) {
     await sleep(retryMs);
   }
   return false;
+}
+
+/** Hace un GET y devuelve el JSON parseado (http o https). */
+function httpGetJson(url, opts = {}) {
+  const { timeoutMs = 15000, headers = {} } = opts || {};
+  return new Promise((resolve, reject) => {
+    const lib = url.startsWith('https') ? require('node:https') : require('node:http');
+    let settled = false;
+    const done = (err, val) => {
+      if (!settled) { settled = true; err ? reject(err) : resolve(val); }
+    };
+    const req = lib.get(url, { headers }, (res) => {
+      let body = '';
+      res.setEncoding('utf8');
+      res.on('data', (c) => (body += c));
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(body);
+          if (res.statusCode >= 200 && res.statusCode < 300) done(null, parsed);
+          else done(new Error(`HTTP ${res.statusCode}`));
+        } catch {
+          done(new Error(`respuesta no JSON (HTTP ${res.statusCode})`));
+        }
+      });
+    });
+    req.on('error', (e) => done(e));
+    req.setTimeout(timeoutMs, () => { req.destroy(); done(new Error('timeout')); });
+  });
 }
 
 // ¿Hay algo escuchando en `port`? Prueba IPv4 e IPv6 (Vite escucha solo en ::1).
@@ -534,6 +566,11 @@ async function main() {
     return;
   }
 
+  if (pullLogs) {
+    await pullProductionLogs();
+    return;
+  }
+
   console.log(
     `${BOLD}${GREEN}Montando servicios${RESET} ${DIM}(${reload ? 'hot-reload ON' : 'hot-reload OFF'})${RESET}\n`,
   );
@@ -832,4 +869,150 @@ async function pullProductionDb() {
   execFileSync('docker', ['exec', '-e', `PGPASSWORD=${localPass}`, container, 'psql', '-U', localUser, '-d', localDb, '-tA', '-c', countsSql], { stdio: 'inherit' });
 
   console.log(`\n${GREEN}✔${RESET} Pull DB completado.`);
+}
+
+// ─── Pull logs: producción → logs-prod/ ───────────────────────────────────
+/**
+ * Baja los logs del backend de producción vía GET /logs (los últimos 200 en
+ * memoria del proceso) y los deja en logs-prod/backend.log (+ backend.json).
+ *
+ * La URL de producción se toma de: --prod-url <url> > PROD_URL env > default.
+ * Nota: /logs solo expone el buffer en memoria del backend (últimos 200 desde
+ * el último reinicio). Para logs completos de la plataforma (Render) hace
+ * falta la dashboard o una RENDER_API_KEY (no implementado).
+ */
+async function pullProductionLogs() {
+  const outDir = path.join(ROOT, 'logs-prod');
+  fs.mkdirSync(outDir, { recursive: true });
+
+  // Si hay RENDER_API_KEY, bajamos logs completos de la plataforma (Render).
+  const renderKey = process.env.RENDER_API_KEY || readEnvFile(path.join(ROOT, '.env')).RENDER_API_KEY;
+  if (renderKey) {
+    await pullRenderLogs(renderKey, outDir);
+    return;
+  }
+
+  // Fallback: endpoint /logs del backend (últimos 200 en memoria del proceso).
+  const prodUrl = (prodUrlArg || process.env.PROD_URL || 'https://whatsapp-bot.onrender.com').replace(/\/+$/, '');
+  console.log(`${BOLD}Pull logs: producción → logs-prod/${RESET}`);
+  console.log(`${DIM}Origen: ${prodUrl}${RESET}\n`);
+
+  try {
+    const data = await httpGetJson(`${prodUrl}/logs?limit=200`);
+    const entries = Array.isArray(data?.logs) ? data.logs : [];
+    const lines = entries.map((e) => {
+      const rest = { ...e };
+      const ts = rest.timestamp ?? ''; delete rest.timestamp;
+      const lvl = rest.level ?? 'info'; delete rest.level;
+      const msg = rest.message ?? ''; delete rest.message;
+      const extra = Object.keys(rest).length ? ' ' + JSON.stringify(rest) : '';
+      return `[${ts}] [${String(lvl).toUpperCase()}] ${msg}${extra}`;
+    });
+    const text = lines.join('\n') + (lines.length ? '\n' : '');
+    fs.writeFileSync(path.join(outDir, 'backend.log'), text);
+    fs.writeFileSync(path.join(outDir, 'backend.json'), JSON.stringify(data, null, 2) + '\n');
+    console.log(`${GREEN}✔${RESET} backend: ${entries.length} entradas → logs-prod/backend.log (+ backend.json)`);
+  } catch (e) {
+    error('pull-logs', `No se pudo obtener logs de ${prodUrl}/logs: ${e.message}`);
+    console.log(`${DIM}  ¿URL de producción correcta? Pásala con: node start.js --pull-logs --prod-url https://<tu-backend>.onrender.com${RESET}`);
+    console.log(`${DIM}  Para logs completos de Render define RENDER_API_KEY (y opcional RENDER_OWNER_ID).${RESET}`);
+    process.exitCode = 1;
+  }
+}
+
+/** Baja logs completos vía la API de Render (requiere RENDER_API_KEY). */
+async function pullRenderLogs(renderKey, outDir) {
+  const base = 'https://api.render.com/v1';
+  const headers = { Authorization: `Bearer ${renderKey}`, Accept: 'application/json' };
+  const limit = 100;
+  const maxPages = 5; // ~500 entradas por servicio
+
+  console.log(`${BOLD}Pull logs: Render API → logs-prod/${RESET}`);
+
+  // 1) Workspace (ownerId) — se puede forzar con RENDER_OWNER_ID.
+  let ownerId = process.env.RENDER_OWNER_ID;
+  if (!ownerId) {
+    try {
+      const owners = await httpGetJson(`${base}/owners`, { headers });
+      ownerId = Array.isArray(owners) ? owners[0]?.id : undefined;
+    } catch { /* se informa abajo */ }
+    if (!ownerId) {
+      error('pull-logs', 'No pude determinar el ownerId. Definí RENDER_OWNER_ID (o RENDER_API_KEY con acceso al workspace).');
+      process.exitCode = 1;
+      return;
+    }
+  }
+
+  // 2) Servicios de interés (backend + knowledge-service).
+  let targets = [];
+  try {
+    const services = await httpGetJson(`${base}/services`, { headers });
+    const wanted = new Set(['whatsapp-bot', 'knowledge-service']);
+    targets = (Array.isArray(services) ? services : []).filter((s) => wanted.has(s.name));
+  } catch (e) {
+    error('pull-logs', `No se pudo listar servicios de Render: ${e.message}`);
+    process.exitCode = 1;
+    return;
+  }
+  if (targets.length === 0) {
+    error('pull-logs', 'No encontré los servicios "whatsapp-bot" / "knowledge-service" en Render.');
+    process.exitCode = 1;
+    return;
+  }
+
+  // 3) Logs con paginación (direction=backward → más recientes primero).
+  const all = [];
+  let startTime, endTime, hasMore = true;
+  try {
+    for (let page = 0; page < maxPages && hasMore; page++) {
+      const q = [
+        `ownerId=${encodeURIComponent(ownerId)}`,
+        ...targets.map((s) => `resource=${encodeURIComponent(s.id)}`),
+        'direction=backward',
+        `limit=${limit}`,
+        'type=app',
+        startTime ? `startTime=${encodeURIComponent(startTime)}` : '',
+        endTime ? `endTime=${encodeURIComponent(endTime)}` : '',
+      ].filter(Boolean).join('&');
+      const data = await httpGetJson(`${base}/logs?${q}`, { headers });
+      const list = Array.isArray(data?.logs) ? data.logs : [];
+      all.push(...list);
+      hasMore = !!data?.hasMore;
+      startTime = data?.nextStartTime;
+      endTime = data?.nextEndTime;
+      if (list.length === 0) break;
+    }
+  } catch (e) {
+    error('pull-logs', `No se pudo obtener logs de la API de Render: ${e.message}`);
+    process.exitCode = 1;
+    return;
+  }
+
+  // 4) Guardar: por servicio si la entrada trae resource/resourceName, si no, combinado.
+  const byId = new Map(targets.map((s) => [s.id, s.name]));
+  const groups = new Map();
+  for (const e of all) {
+    const rid = e.resource || e.resourceId;
+    const name = (rid && byId.get(rid)) || e.resourceName || 'render';
+    if (!groups.has(name)) groups.set(name, []);
+    groups.get(name).push(e);
+  }
+  if (groups.size === 0) groups.set('render', []);
+
+  let total = 0;
+  for (const [name, list] of groups) {
+    const safe = name === 'whatsapp-bot' ? 'backend' : name === 'knowledge-service' ? 'knowledge-service' : 'render';
+    const lines = list.map((e) => {
+      const ts = e.timestamp ?? '';
+      const lvl = e.level ?? e.type ?? 'info';
+      const msg = typeof e.message === 'string' ? e.message : JSON.stringify(e);
+      return `[${ts}] [${String(lvl).toUpperCase()}] ${msg}`;
+    });
+    const text = lines.join('\n') + (lines.length ? '\n' : '');
+    fs.writeFileSync(path.join(outDir, `${safe}.log`), text);
+    fs.writeFileSync(path.join(outDir, `${safe}.json`), JSON.stringify(list, null, 2) + '\n');
+    total += list.length;
+    console.log(`${GREEN}✔${RESET} ${name}: ${list.length} entradas → logs-prod/${safe}.log (+ ${safe}.json)`);
+  }
+  console.log(`${DIM}${hasMore ? `Hay más logs (hasMore) — bajé ${total} con paginación.` : `Total: ${total} entradas.`}${RESET}`);
 }
