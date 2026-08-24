@@ -13,7 +13,7 @@
  *   node start.js                 monta los servicios y abre una terminal de logs por servicio
  *   node start.js --stop          detiene los servicios (mata lo que ocupe sus puertos)
  *   node start.js --pull-db       trae TODOS los datos de producción (Supabase) a la base local
- *   node start.js --pull-logs     baja los logs del backend de producción a logs-prod/ (--prod-url <url>)
+ *   node start.js --pull-logs     baja logs de producción a logs-prod/ (Render + Supabase; requiere RENDER_API_KEY, opcional SUPABASE_ACCESS_TOKEN)
  *   node start.js --ks-docker     knowledge-service ya corre en Docker (no lo monta en el host)
  *   node start.js --no-reload     desactiva hot-reload de los 3 servicios
  *   node start.js --external      fuerza ventanas de terminal del sistema aunque estés en Zed
@@ -172,6 +172,44 @@ function httpGetJson(url, opts = {}) {
     });
     req.on('error', (e) => done(e));
     req.setTimeout(timeoutMs, () => { req.destroy(); done(new Error('timeout')); });
+  });
+}
+
+/** POST JSON y devuelve el JSON parseado (para APIs tipo Supabase/Logflare). */
+function httpPostJson(url, body, opts = {}) {
+  const { timeoutMs = 20000, headers = {} } = opts || {};
+  return new Promise((resolve, reject) => {
+    const lib = url.startsWith('https') ? require('node:https') : require('node:http');
+    let settled = false;
+    const done = (err, val) => {
+      if (!settled) { settled = true; err ? reject(err) : resolve(val); }
+    };
+    const payload = JSON.stringify(body ?? {});
+    const req = lib.request(
+      url,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload), ...headers },
+      },
+      (res) => {
+        let data = '';
+        res.setEncoding('utf8');
+        res.on('data', (c) => (data += c));
+        res.on('end', () => {
+          try {
+            const parsed = JSON.parse(data);
+            if (res.statusCode >= 200 && res.statusCode < 300) done(null, parsed);
+            else done(new Error(`HTTP ${res.statusCode}: ${typeof parsed.message === 'string' ? parsed.message : JSON.stringify(parsed).slice(0, 200)}`));
+          } catch {
+            done(new Error(`respuesta no JSON (HTTP ${res.statusCode})`));
+          }
+        });
+      }
+    );
+    req.on('error', (e) => done(e));
+    req.setTimeout(timeoutMs, () => { req.destroy(); done(new Error('timeout')); });
+    req.write(payload);
+    req.end();
   });
 }
 
@@ -892,34 +930,202 @@ async function pullProductionLogs() {
   const renderKey = process.env.RENDER_API_KEY || readEnvFile(path.join(ROOT, '.env')).RENDER_API_KEY;
   if (renderKey) {
     await pullRenderLogs(renderKey, outDir);
+  } else {
+    // Fallback: endpoint /logs del backend (últimos 200 en memoria del proceso).
+    const prodUrl = (prodUrlArg || process.env.PROD_URL || 'https://whatsapp-bot.onrender.com').replace(/\/+$/, '');
+    console.log(`${BOLD}Pull logs: producción → logs-prod/${RESET}`);
+    console.log(`${DIM}Origen: ${prodUrl}${RESET}\n`);
+
+    try {
+      const data = await httpGetJson(`${prodUrl}/logs?limit=200`);
+      const entries = Array.isArray(data?.logs) ? data.logs : [];
+      const lines = entries.map((e) => {
+        const rest = { ...e };
+        const ts = rest.timestamp ?? ''; delete rest.timestamp;
+        const lvl = rest.level ?? 'info'; delete rest.level;
+        const msg = rest.message ?? ''; delete rest.message;
+        const extra = Object.keys(rest).length ? ' ' + JSON.stringify(rest) : '';
+        return `[${ts}] [${String(lvl).toUpperCase()}] ${msg}${extra}`;
+      });
+      const text = lines.join('\n') + (lines.length ? '\n' : '');
+      fs.writeFileSync(path.join(outDir, 'backend.log'), text);
+      fs.writeFileSync(path.join(outDir, 'backend.json'), JSON.stringify(data, null, 2) + '\n');
+      console.log(`${GREEN}✔${RESET} backend: ${entries.length} entradas → logs-prod/backend.log (+ backend.json)`);
+    } catch (e) {
+      error('pull-logs', `No se pudo obtener logs de ${prodUrl}/logs: ${e.message}`);
+      console.log(`${DIM}  ¿URL de producción correcta? Pásala con: node start.js --pull-logs --prod-url https://<tu-backend>.onrender.com${RESET}`);
+      console.log(`${DIM}  Para logs completos de Render define RENDER_API_KEY (y opcional RENDER_OWNER_ID).${RESET}`);
+      process.exitCode = 1;
+    }
+  }
+
+  // Logs de la DB (Supabase) — complementario a los de Render.
+  await pullSupabaseLogs(outDir);
+}
+
+/** Baja logs de PostgreSQL (Supabase) vía la Logs API — requiere SUPABASE_ACCESS_TOKEN. */
+async function pullSupabaseLogs(outDir) {
+  const rootEnv = readEnvFile(path.join(ROOT, '.env'));
+  const backendEnv = readEnvFile(path.join(ROOT, 'backend', '.env'));
+  const token = process.env.SUPABASE_ACCESS_TOKEN || rootEnv.SUPABASE_ACCESS_TOKEN || backendEnv.SUPABASE_ACCESS_TOKEN;
+  const dbUrl = process.env.PROD_DATABASE_URL || backendEnv.DATABASE_URL || rootEnv.DATABASE_URL;
+  const ref = process.env.SUPABASE_PROJECT_REF || rootEnv.SUPABASE_PROJECT_REF ||
+    ((dbUrl && (dbUrl.match(/postgres\.([a-z0-9]+)(?:@|:)/) || dbUrl.match(/postgres\.([a-z0-9]+)\.(?:pooler\.)?supabase\.co/) || dbUrl.match(/db\.([a-z0-9]+)\.supabase\.co/))) || [])[1];
+
+  if (!token) {
+    console.log(`${DIM}Supabase logs: define SUPABASE_ACCESS_TOKEN en .env para bajar los logs de la DB (token en https://supabase.com/dashboard/account/tokens).${RESET}`);
+    return;
+  }
+  if (!ref) {
+    error('pull-logs', 'No pude determinar el project ref de Supabase. Definí SUPABASE_PROJECT_REF o una DATABASE_URL con *.supabase.co.');
+    process.exitCode = 1;
     return;
   }
 
-  // Fallback: endpoint /logs del backend (últimos 200 en memoria del proceso).
-  const prodUrl = (prodUrlArg || process.env.PROD_URL || 'https://whatsapp-bot.onrender.com').replace(/\/+$/, '');
-  console.log(`${BOLD}Pull logs: producción → logs-prod/${RESET}`);
-  console.log(`${DIM}Origen: ${prodUrl}${RESET}\n`);
+  const url = `https://api.supabase.com/v1/projects/${encodeURIComponent(ref)}/analytics/logs`;
+  const rich = [
+    'select cast(timestamp as datetime) as timestamp,',
+    "coalesce(parsed.error_severity, 'LOG') as severity,",
+    "coalesce(metadata->>'database_name', '') as database_name,",
+    'event_message',
+    'from postgres_logs',
+    'order by timestamp desc',
+    'limit 500',
+  ].join(' ');
+  const minimal = [
+    'select cast(timestamp as datetime) as timestamp, event_message',
+    'from postgres_logs',
+    'order by timestamp desc',
+    'limit 500',
+  ].join(' ');
+
+  console.log(`${BOLD}Pull logs: Supabase (${ref}) → logs-prod/${RESET}`);
+  let data;
+  try {
+    data = await httpPostJson(url, { sql: rich }, { headers: { Authorization: `Bearer ${token}` } });
+  } catch (e1) {
+    // Si la query enriquecida falla (columnas de parsed/metadata), usar la mínima.
+    try {
+      data = await httpPostJson(url, { sql: minimal }, { headers: { Authorization: `Bearer ${token}` } });
+    } catch (e2) {
+      // La Logs API histórica requiere service_role key (JWT) o sesión del dashboard.
+      console.warn(`${YELLOW}⚠${RESET} Logs API de Supabase no disponible con este token (${e2.message}).`);
+      console.log(`${DIM}  Los logs históricos de la DB requieren la service_role key del dashboard
+  (Project Settings → API) o exportarlos desde el Logs Explorer. Mientras tanto,
+  bajo un snapshot de actividad actual de la DB (misma DATABASE_URL).${RESET}`);
+      await pullDbActivity(outDir);
+      return;
+    }
+  }
+
+  const rows = Array.isArray(data?.result) ? data.result : [];
+  const lines = rows.map((r) => {
+    const sev = r.severity || 'LOG';
+    const db = r.database_name ? `(${r.database_name}) ` : '';
+    return `[${r.timestamp ?? ''}] [${String(sev).toUpperCase()}] ${db}${r.event_message ?? ''}`;
+  });
+  const text = lines.join('\n') + (lines.length ? '\n' : '');
+  fs.writeFileSync(path.join(outDir, 'supabase.log'), text);
+  fs.writeFileSync(path.join(outDir, 'supabase.json'), JSON.stringify(data, null, 2) + '\n');
+  console.log(`${GREEN}✔${RESET} supabase: ${rows.length} entradas → logs-prod/supabase.log (+ supabase.json)`);
+}
+
+/**
+ * Snapshot de actividad actual de la DB (conexiones + queries más costosos),
+ * usando la misma DATABASE_URL del backend. Se usa cuando la Logs API no está
+ * disponible con el token configurado.
+ */
+async function pullDbActivity(outDir) {
+  const backendEnv = readEnvFile(path.join(ROOT, 'backend', '.env'));
+  const dbUrl = process.env.PROD_DATABASE_URL || backendEnv.DATABASE_URL;
+  if (!dbUrl) {
+    error('pull-logs', 'Sin DATABASE_URL para el snapshot de actividad.');
+    process.exitCode = 1;
+    return;
+  }
+
+  let Client;
+  try {
+    Client = require(path.join(ROOT, 'backend', 'node_modules', 'pg')).Client;
+  } catch {
+    error('pull-logs', 'pg no está disponible en backend/node_modules');
+    process.exitCode = 1;
+    return;
+  }
+
+  const client = new Client({
+    connectionString: dbUrl,
+    ssl: dbUrl.includes('supabase.co') ? { rejectUnauthorized: false } : undefined,
+    connectionTimeoutMillis: 15000,
+  });
 
   try {
-    const data = await httpGetJson(`${prodUrl}/logs?limit=200`);
-    const entries = Array.isArray(data?.logs) ? data.logs : [];
-    const lines = entries.map((e) => {
-      const rest = { ...e };
-      const ts = rest.timestamp ?? ''; delete rest.timestamp;
-      const lvl = rest.level ?? 'info'; delete rest.level;
-      const msg = rest.message ?? ''; delete rest.message;
-      const extra = Object.keys(rest).length ? ' ' + JSON.stringify(rest) : '';
-      return `[${ts}] [${String(lvl).toUpperCase()}] ${msg}${extra}`;
-    });
-    const text = lines.join('\n') + (lines.length ? '\n' : '');
-    fs.writeFileSync(path.join(outDir, 'backend.log'), text);
-    fs.writeFileSync(path.join(outDir, 'backend.json'), JSON.stringify(data, null, 2) + '\n');
-    console.log(`${GREEN}✔${RESET} backend: ${entries.length} entradas → logs-prod/backend.log (+ backend.json)`);
+    await client.connect();
+    const act = await client.query(
+      `SELECT pid, usename, state, wait_event_type,
+              left(query, 120) AS query, (now() - query_start)::text AS age
+         FROM pg_stat_activity
+        WHERE pid <> pg_backend_pid()
+        ORDER BY query_start DESC NULLS LAST
+        LIMIT 30`
+    );
+    let stats = { rows: [] };
+    try {
+      stats = await client.query(
+        `SELECT calls, total_exec_time::numeric(12,1) AS total_ms,
+                mean_exec_time::numeric(10,1) AS mean_ms, rows,
+                left(query, 100) AS query
+           FROM pg_stat_statements
+          ORDER BY total_exec_time DESC
+          LIMIT 20`
+      );
+    } catch {
+      /* pg_stat_statements no habilitado / sin permiso */
+    }
+
+    const lines = [
+      '# Snapshot de actividad de la DB (la Logs API histórica no fue accesible con el token)',
+      '# ' + new Date().toISOString(),
+      '',
+      '== CONEXIONES / QUERIES ACTIVOS ==',
+      ...(act.rows.length
+        ? act.rows.map((r) => `[${r.age}] [${r.usename || '?'}] [${r.state || '?'}] ${r.query}`)
+        : ['(sin actividad)']),
+      '',
+      '== QUERIES MÁS COSTOSOS (pg_stat_statements) ==',
+      ...(stats.rows.length
+        ? stats.rows.map((r) => `[${r.calls} llamadas] [${r.total_ms} ms total] ${r.query}`)
+        : ['(pg_stat_statements no habilitado)']),
+    ];
+    fs.writeFileSync(path.join(outDir, 'supabase.log'), lines.join('\n') + '\n');
+    fs.writeFileSync(path.join(outDir, 'supabase.json'), JSON.stringify({ activity: act.rows, statements: stats.rows }, null, 2) + '\n');
+    console.log(`${GREEN}✔${RESET} supabase: snapshot de actividad (${act.rows.length} conexiones, ${stats.rows.length} statements) → logs-prod/supabase.log`);
   } catch (e) {
-    error('pull-logs', `No se pudo obtener logs de ${prodUrl}/logs: ${e.message}`);
-    console.log(`${DIM}  ¿URL de producción correcta? Pásala con: node start.js --pull-logs --prod-url https://<tu-backend>.onrender.com${RESET}`);
-    console.log(`${DIM}  Para logs completos de Render define RENDER_API_KEY (y opcional RENDER_OWNER_ID).${RESET}`);
+    error('pull-logs', `No se pudo leer actividad de la DB: ${e.message}`);
     process.exitCode = 1;
+  } finally {
+    await client.end().catch(() => {});
+  }
+}
+
+/** Normaliza una URL de repo de git para comparar (git@ / https:// / .git). */
+function normalizeRepo(url) {
+  if (!url) return '';
+  return String(url)
+    .replace(/^git@/, '')
+    .replace(/^https?:\/\//, '')
+    .replace(/^ssh:\/\//, '')
+    .replace(/\.git$/, '')
+    .replace(/\/$/, '')
+    .trim();
+}
+
+/** URL del remote origin del repo local ('' si no hay git). */
+function localRepoUrl() {
+  try {
+    return execFileSync('git', ['config', '--get', 'remote.origin.url'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch {
+    return '';
   }
 }
 
@@ -947,33 +1153,54 @@ async function pullRenderLogs(renderKey, outDir) {
     }
   }
 
-  // 2) Servicios: los pasados con --service, o auto-descubiertos por nombre.
+  // 2) Servicios: --service > RENDER_SERVICE_ID (.env) > auto-detección.
+  //    La auto-detección prefiere los servicios cuyo repo coincide con el repo
+  //    local de git; si no, por nombre conocido (chatbot-platform/whatsapp-bot).
   let targets = [];
+  const renderEnv = readEnvFile(path.join(ROOT, '.env'));
+  const svcIdEnv = process.env.RENDER_SERVICE_ID || renderEnv.RENDER_SERVICE_ID;
+
+  const resolveName = async (id) => {
+    try {
+      const svc = await httpGetJson(`${base}/services/${encodeURIComponent(id)}`, { headers });
+      const s = svc?.service || svc;
+      return s?.name || id;
+    } catch {
+      return id;
+    }
+  };
+
   if (serviceIdsArg.length) {
     for (const id of serviceIdsArg) {
-      let name = id;
-      try {
-        const svc = await httpGetJson(`${base}/services/${encodeURIComponent(id)}`, { headers });
-        if (svc?.name) name = svc.name;
-      } catch { /* usamos el id como nombre */ }
-      targets.push({ id, name });
+      targets.push({ id, name: await resolveName(id) });
     }
+  } else if (svcIdEnv) {
+    targets.push({ id: svcIdEnv, name: await resolveName(svcIdEnv) });
+    console.log(`${DIM}Servicio: ${targets[0].name} (RENDER_SERVICE_ID)${RESET}`);
   } else {
+    let services = [];
     try {
-      const services = await httpGetJson(`${base}/services`, { headers });
-      const wanted = new Set(['whatsapp-bot', 'knowledge-service', 'chatbot-platform']);
-      // La lista devuelve [{ cursor, service: { id, name, ... } }]
-      targets = (Array.isArray(services) ? services : [])
-        .map((s) => s.service || s)
-        .filter((s) => s && wanted.has(s.name));
+      const data = await httpGetJson(`${base}/services`, { headers });
+      // La lista devuelve [{ cursor, service: { id, name, repo, ... } }]
+      services = (Array.isArray(data) ? data : []).map((s) => s.service || s).filter(Boolean);
     } catch (e) {
       error('pull-logs', `No se pudo listar servicios de Render: ${e.message}`);
       process.exitCode = 1;
       return;
     }
+
+    const localRepo = normalizeRepo(localRepoUrl());
+    targets = localRepo ? services.filter((s) => normalizeRepo(s.repo) === localRepo) : [];
+    if (targets.length === 0) {
+      const wanted = new Set(['chatbot-platform', 'whatsapp-bot', 'knowledge-service']);
+      targets = services.filter((s) => wanted.has(s.name));
+    }
+    if (targets.length > 0) {
+      console.log(`${DIM}Servicios detectados: ${targets.map((s) => `${s.name} (${s.id})`).join(', ')}${RESET}`);
+    }
   }
   if (targets.length === 0) {
-    error('pull-logs', 'No encontré los servicios. Pasalos con --service <id> (p. ej. --service srv-d9obgg8ae00c73b4g8og) o con una RENDER_API_KEY con acceso.');
+    error('pull-logs', 'No encontré los servicios. Definí RENDER_SERVICE_ID en .env (p. ej. RENDER_SERVICE_ID=srv-d9obgg8ae00c73b4g8og) o pásalo con --service <id>.');
     process.exitCode = 1;
     return;
   }
