@@ -574,12 +574,14 @@ async function chatWithDeepSeek(userMessage, userName = 'Usuario', userId = 'unk
   const messages = [];
   const settings = await getSettings(botId);
   let systemPrompt = settings.systemPrompt?.trim();
+  let contextInjected = false;
 
   if (!systemPrompt) {
     // Fallback: usar el prompt duro por defecto
     if (relevantChunks.length > 0) {
       const context = relevantChunks.map((c, i) => `[Fuente ${i + 1}]:\n${c.content}`).join('\n\n---\n\n');
       systemPrompt = DEFAULT_SYSTEM_PROMPT.replace('{context}', context);
+      contextInjected = true;
     } else {
       systemPrompt = DEFAULT_SYSTEM_PROMPT_FALLBACK;
     }
@@ -589,9 +591,21 @@ async function chatWithDeepSeek(userMessage, userName = 'Usuario', userId = 'unk
       ? relevantChunks.map((c, i) => `[Fuente ${i + 1}]:\n${c.content}`).join('\n\n---\n\n')
       : '(No hay información adicional disponible en este momento.)';
     systemPrompt = systemPrompt.replace('{context}', context);
+    contextInjected = true;
   }
 
   messages.push({ role: 'system', content: systemPrompt });
+
+  // Prompt personalizado SIN {context}: inyectar igualmente el contexto RAG
+  // como mensaje de sistema adicional, para que el modelo SIEMPRE vea el
+  // conocimiento recuperado (antes se descartaba silenciosamente).
+  if (!contextInjected && relevantChunks.length > 0) {
+    const context = relevantChunks.map((c, i) => `[Fuente ${i + 1}]:\n${c.content}`).join('\n\n---\n\n');
+    messages.push({
+      role: 'system',
+      content: 'DATOS DISPONIBLES (base de conocimiento de la empresa — úsalos para responder con datos reales):\n' + context,
+    });
+  }
 
   // ═══ Dynamic function list: solo las habilitadas aparecen en el prompt ═══
   const enabledTools = await getToolsForBot(botId);
