@@ -23,6 +23,9 @@ const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
 const KNOWLEDGE_SERVICE_URL = process.env.KNOWLEDGE_SERVICE_URL || 'http://localhost:8000';
 const DEEPSEEK_API_URL = 'https://api.deepseek.com';
 
+// Contraseña para comandos dev: (dev:context, …) — leída del .env
+const ADMIN_DEV_PASSWORD = process.env.ADMIN_DEV_PASSWORD || '';
+
 const { ALLOWED_MODELS } = require('./settings');
 
 // System prompt default (fallback si el bot no tiene uno propio).
@@ -91,6 +94,67 @@ async function listModels() {
 
 
 
+// ─── Fallback de búsqueda directa en la DB ──────────────────────────────────
+// Cuando el knowledge-service no responde, se leen los chunks directo de la
+// misma base para que el bot no se quede sin contexto (replica el modo "none"
+// del service: prioriza coincidencias por keywords, si no hay, los primeros).
+
+const STOPWORDS_ES = new Set(
+  'de la que el en y a los del se las por un para con no una su al lo como mas pero sus le ya o este si porque esta entre cuando muy sin sobre tambien me hasta hay donde quien desde todo nos durante todos uno les ni contra otros ese eso ante ellos e esto mi antes algunos que unos yo otro otras otra el tanto esa estos mucho quienes nada muchos cual poco ella estar estas algunas algo nosotros mis tu te ti tus ellas nosotras vosotras os mio mia mios mias tuyo tuya tuyos tuyas suyo suya suyos suyas nuestro nuestra nuestros nuestras vuestro vuestra vuestros vuestras esos esas aquel aquella aquellos aquellas estas estos dame quiero necesito hola buenas buenos saludos gracias porfa por favor'.split(/\s+/)
+);
+
+const normalizeText = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+function tokenizeQuery(text) {
+  return normalizeText(text)
+    .split(/[^a-z0-9]+/)
+    .filter((t) => t.length >= 3 && !STOPWORDS_ES.has(t));
+}
+
+async function searchKnowledgeDbFallback(query, botId, topK) {
+  const { query: dbQuery } = require('./db');
+  const { rows } = await dbQuery(
+    `SELECT c.id::text AS chunk_id, c.content, c.chunk_index,
+            d.id::text AS document_id, d.title AS document_title,
+            s.title AS source_title
+       FROM knowledge_chunks c
+       JOIN knowledge_documents d ON d.id = c.document_id
+       JOIN knowledge_sources s ON s.id = d.source_id
+      WHERE s.bot_id IS NOT DISTINCT FROM $1 AND s.status = 'completed'
+      ORDER BY c.chunk_index
+      LIMIT $2`,
+    [botId || null, 200]
+  );
+  if (rows.length === 0) return [];
+
+  const terms = tokenizeQuery(query);
+  const scored = rows.map((r) => {
+    const content = normalizeText(r.content);
+    const title = normalizeText(`${r.document_title} ${r.source_title || ''}`);
+    let score = 0;
+    for (const t of terms) {
+      if (content.includes(t)) score += t.length >= 5 ? 2 : 1;
+      if (title.includes(t)) score += 3;
+    }
+    return { r, score };
+  });
+
+  const matches = scored.filter((x) => x.score > 0).sort((a, b) => b.score - a.score);
+  // Con coincidencias: topK mejores. Sin coincidencias: los primeros chunks del
+  // documento (para bases pequeñas el modelo alcanza a ver el contenido general).
+  const n = matches.length > 0 ? topK : Math.max(topK, 10);
+  const selected = (matches.length > 0 ? matches : scored).slice(0, n);
+
+  return selected.map(({ r }) => ({
+    chunk_id: r.chunk_id,
+    content: r.content,
+    chunk_index: r.chunk_index,
+    document_id: r.document_id,
+    document_title: r.document_title,
+    similarity: null,
+  }));
+}
+
 /**
  * Search the knowledge base for relevant context.
  */
@@ -107,8 +171,40 @@ async function searchKnowledge(query, botId) {
     const status = err.response?.status;
     const detail = err.response?.data?.detail ?? err.response?.data?.error ?? err.message;
     console.warn(`Knowledge search fallback (${status || 'network'}): ${typeof detail === 'string' ? detail : JSON.stringify(detail)}`);
-    return null; // null = knowledge-service no disponible (≠ “no hay chunks en la DB”)
+    // Último recurso: leer chunks directo de la DB (misma base) para que el bot
+    // no se quede sin contexto cuando el knowledge-service no responde.
+    try {
+      const chunks = await searchKnowledgeDbFallback(query, botId, topK);
+      if (chunks.length > 0) {
+        console.log(`  🔁 Fallback DB: ${chunks.length} chunk(s) recuperados directo de la DB`);
+      }
+      return chunks; // [] = el bot realmente no tiene chunks (base vacía)
+    } catch (dbErr) {
+      console.warn('Fallback DB falló:', dbErr.message);
+      return null; // ni el servicio ni la DB → estado desconocido
+    }
   }
+}
+
+/**
+ * Comparación en tiempo constante (evita timing attacks en la contraseña).
+ */
+function safeEqual(a, b) {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+/**
+ * Detecta comandos dev: y extrae la contraseña: "dev:context <contraseña>"
+ * → { command: 'context', password: '...' } o null si no es comando dev:.
+ */
+function parseDevCommand(text) {
+  if (typeof text !== 'string') return null;
+  const m = text.trim().match(/^dev:([a-z_]+)(?:\s+(.+))?$/i);
+  if (!m) return null;
+  return { command: m[1].toLowerCase(), password: (m[2] || '').trim() };
 }
 
 /**
@@ -371,18 +467,37 @@ Responde ÚNICAMENTE con una palabra: "SI" si la respuesta inventa datos concret
 async function chatWithDeepSeek(userMessage, userName = 'Usuario', userId = 'unknown', botId) {
   let relevantChunks = [];
 
-  // ── Comando dev:context — entrega la base de conocimiento del bot ──
-  if (typeof userMessage === 'string' && userMessage.trim().toLowerCase() === 'dev:context') {
-    try {
-      const answer = await buildContextDump(botId);
-      return { answer, chunks: [], escalated: false };
-    } catch (err) {
-      console.error('dev:context falló:', err.message);
+  // ── Comandos dev: (dev:context, …) — requieren contraseña de admin ──
+  const devCmd = parseDevCommand(userMessage);
+  if (devCmd) {
+    if (!ADMIN_DEV_PASSWORD) {
       return {
-        answer: '⚠️ No pude leer la base de conocimiento: ' + err.message,
+        answer: '⚠️ Los comandos dev: están deshabilitados (falta ADMIN_DEV_PASSWORD en el .env).',
         chunks: [], escalated: false,
       };
     }
+    if (!safeEqual(devCmd.password, ADMIN_DEV_PASSWORD)) {
+      return {
+        answer: '🔒 Comando dev: requiere la contraseña de administrador. Formato: dev:<comando> <contraseña>',
+        chunks: [], escalated: false,
+      };
+    }
+    if (devCmd.command === 'context') {
+      try {
+        const answer = await buildContextDump(botId);
+        return { answer, chunks: [], escalated: false };
+      } catch (err) {
+        console.error('dev:context falló:', err.message);
+        return {
+          answer: '⚠️ No pude leer la base de conocimiento: ' + err.message,
+          chunks: [], escalated: false,
+        };
+      }
+    }
+    return {
+      answer: `❓ Comando dev:${devCmd.command} desconocido. Disponibles: dev:context`,
+      chunks: [], escalated: false,
+    };
   }
 
   // ── Conversation memory (per bot) ─────────────────────────────────
