@@ -12,6 +12,7 @@
  * Uso:
  *   node start.js                 monta los servicios y abre una terminal de logs por servicio
  *   node start.js --stop          detiene los servicios (mata lo que ocupe sus puertos)
+ *   node start.js --pull-db       trae TODOS los datos de producción (Supabase) a la base local
  *   node start.js --no-reload     desactiva hot-reload de los 3 servicios
  *   node start.js --external      fuerza ventanas de terminal del sistema aunque estés en Zed
  *
@@ -45,6 +46,8 @@ const { spawn, execFileSync } = require('node:child_process');
 const path = require('node:path');
 const fs = require('node:fs');
 const net = require('node:net');
+const http = require('node:http');
+const os = require('node:os');
 
 const ROOT = __dirname;
 const LOG_DIR = path.join(ROOT, 'logs');
@@ -66,6 +69,7 @@ const COLORS = {
 const reload = !process.argv.includes('--no-reload');
 const stop = process.argv.includes('--stop');
 const forceExternal = process.argv.includes('--external');
+const pullDb = process.argv.includes('--pull-db');
 
 // ¿Ejecutamos dentro del terminal integrado de Zed? (un script no puede
 // abrir paneles de terminal ahí, así que en ese caso imprimimos comandos
@@ -106,6 +110,33 @@ const services = [
 // ─── Puertos: liberar puertos ocupados ────────────────────────────────────
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// ─── Health check HTTP ─────────────────────────────────────────────────────
+/** Hace un GET simple y devuelve true si el servidor respondió (HTTP < 500). */
+function httpReady(url, timeoutMs = 3000) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (ok) => {
+      if (!settled) { settled = true; resolve(ok); }
+    };
+    const req = http.get(url, (res) => {
+      res.resume();
+      done(res.statusCode !== undefined && res.statusCode < 500);
+    });
+    req.on('error', () => done(false));
+    req.setTimeout(timeoutMs, () => { req.destroy(); done(false); });
+  });
+}
+
+/** Espera a que una URL responda; true si lo logra antes del timeout. */
+async function waitForHttp(url, { timeoutMs = 60000, retryMs = 500 } = {}) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (await httpReady(url)) return true;
+    await sleep(retryMs);
+  }
+  return false;
 }
 
 // ¿Hay algo escuchando en `port`? Prueba IPv4 e IPv6 (Vite escucha solo en ::1).
@@ -497,6 +528,11 @@ async function main() {
     return;
   }
 
+  if (pullDb) {
+    await pullProductionDb();
+    return;
+  }
+
   console.log(
     `${BOLD}${GREEN}Montando servicios${RESET} ${DIM}(${reload ? 'hot-reload ON' : 'hot-reload OFF'})${RESET}\n`,
   );
@@ -624,6 +660,33 @@ async function main() {
   // ── Terminales de logs ──
   openLogsTerminals();
 
+  // ── Esperar a que los servicios estén listos antes de mostrar los puertos ──
+  const BACKEND_PORT = process.env.BACKEND_PORT || '3000';
+  const WEB_PORT = process.env.WEB_PORT || '5173';
+  const KNOWLEDGE_PORT = process.env.KNOWLEDGE_PORT || '8000';
+  const READY_TIMEOUT_MS = 60000;
+
+  const checks = [
+    { name: 'backend', url: `http://localhost:${BACKEND_PORT}/health` },
+    { name: 'chat-web', url: `http://localhost:${WEB_PORT}/` },
+    { name: 'knowledge-service', url: `http://localhost:${KNOWLEDGE_PORT}/health` },
+  ];
+
+  console.log(`${DIM}Verificando que los servicios estén listos…${RESET}`);
+  const readyResults = await Promise.all(
+    checks.map((c) => waitForHttp(c.url, { timeoutMs: READY_TIMEOUT_MS }).then((ok) => ({ ...c, ok }))),
+  );
+
+  const notReady = readyResults.filter((r) => !r.ok);
+  if (notReady.length > 0) {
+    for (const r of notReady) {
+      warn(r.name, `no respondió en ${r.url} (revisa logs/${r.name}.log)`);
+    }
+    error('start', 'Algunos servicios no quedaron listos; no se muestran los puertos.');
+    console.log(`${DIM}Los procesos quedaron montados en background; revisa logs/*.log. Detener todo → node start.js --stop${RESET}`);
+    return;
+  }
+
   const logsHint =
     IN_ZED && !forceExternal
       ? 'Logs → pega en paneles de Zed los comandos de arriba (o tail -n 100 -f logs/*.log)'
@@ -632,9 +695,9 @@ async function main() {
   const pidOf = (name) => mounted.find((m) => m.service.name === name).pid;
   console.log(`
 ${BOLD}Servicios montados en background:${RESET}
-  ${GREEN}backend${RESET}            → ${BOLD}http://localhost:${process.env.BACKEND_PORT || '3000'}${RESET}  ${DIM}(PID ${pidOf('backend')})${RESET}
-  ${GREEN}chat-web${RESET}           → ${BOLD}http://localhost:${process.env.WEB_PORT || '5173'}${RESET}  ${DIM}(PID ${pidOf('chat-web')})${RESET}
-  ${GREEN}knowledge-service${RESET}  → ${BOLD}http://localhost:${process.env.KNOWLEDGE_PORT || '8000'}${RESET}  ${DIM}(PID ${pidOf('knowledge-service')})${RESET}
+  ${GREEN}backend${RESET}            → ${BOLD}http://localhost:${BACKEND_PORT}${RESET}  ${DIM}(PID ${pidOf('backend')})${RESET}
+  ${GREEN}chat-web${RESET}           → ${BOLD}http://localhost:${WEB_PORT}${RESET}  ${DIM}(PID ${pidOf('chat-web')})${RESET}
+  ${GREEN}knowledge-service${RESET}  → ${BOLD}http://localhost:${KNOWLEDGE_PORT}${RESET}  ${DIM}(PID ${pidOf('knowledge-service')})${RESET}
   ${DIM}db (contenedor)     → logs/db.log  (docker logs -f en background)${RESET}
   ${DIM}DB (si hace falta) → cd db && docker compose up -d${RESET}
 
@@ -654,4 +717,109 @@ function warn(service, message) {
 }
 function error(service, message) {
   console.log(`${RED}✖ [${service}]${RESET} ${message}`);
+}
+
+// ─── Pull DB: producción → local ───────────────────────────────────────────
+/** Lee un archivo .env simple (CLAVE=VALOR, sin interpolación). */
+function readEnvFile(file) {
+  if (!fs.existsSync(file)) return {};
+  const out = {};
+  for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+    const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
+    if (!m) continue;
+    let val = m[2].trim();
+    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+      val = val.slice(1, -1);
+    }
+    out[m[1]] = val;
+  }
+  return out;
+}
+
+/** Oculta la contraseña de una URL para no imprimirla en consola. */
+function maskUrl(url) {
+  return url.replace(/\/\/([^:@/]+):[^@/]+@/, '//$1:***@');
+}
+
+/**
+ * Trae TODOS los datos de producción (Supabase, PostgreSQL 17) a la base local.
+ * - Vuelca producción con `pg_dump` 17 (imagen postgres:17-alpine de un solo uso),
+ *   porque el Postgres local es 16 y no puede volcar un servidor 17.
+ * - Vacía las tablas locales y restaura el volcado (solo datos, no esquema).
+ */
+async function pullProductionDb() {
+  const backendEnv = readEnvFile(path.join(ROOT, 'backend', '.env'));
+  const prodUrl = process.env.PROD_DATABASE_URL || backendEnv.DATABASE_URL;
+  if (!prodUrl) {
+    error('pull-db', 'No encontré la URL de producción. Define PROD_DATABASE_URL o DATABASE_URL en backend/.env.');
+    process.exit(1);
+  }
+
+  const dbEnv = readEnvFile(path.join(ROOT, 'db', '.env'));
+  const localUser = dbEnv.POSTGRES_USER || 'knowledge';
+  const localPass = dbEnv.POSTGRES_PASSWORD || 'knowledge';
+  const localDb = dbEnv.POSTGRES_DB || 'knowledge_db';
+  const container = 'knowledge-db';
+
+  // Verifica que el contenedor local esté corriendo.
+  let running = false;
+  try {
+    running = execFileSync('docker', ['inspect', '-f', '{{.State.Running}}', container], { stdio: 'pipe' }).toString().trim() === 'true';
+  } catch { /* contenedor inexistente */ }
+  if (!running) {
+    error('pull-db', `El contenedor "${container}" no está corriendo. Levántalo con: cd db && docker compose up -d`);
+    process.exit(1);
+  }
+
+  const dumpUrl = prodUrl.includes('?') ? `${prodUrl}&sslmode=require` : `${prodUrl}?sslmode=require`;
+
+  console.log(`${BOLD}Pull DB: producción → local${RESET}`);
+  console.log(`${DIM}Origen:  ${maskUrl(prodUrl)}${RESET}`);
+  console.log(`${DIM}Destino: postgresql://${localUser}@${container}/${localDb}${RESET}\n`);
+
+  // 1) Volcar producción a un archivo temporal (antes de tocar local, así un
+  //    fallo de red/pg_dump no deja la base local vacía).
+  const tmp = path.join(os.tmpdir(), `chatbot-prod-dump-${Date.now()}.sql`);
+  const fd = fs.openSync(tmp, 'w');
+  console.log(`${DIM}1) Volcando datos de producción (pg_dump 17)…${RESET}`);
+  try {
+    execFileSync('docker', ['run', '--rm', 'postgres:17-alpine', 'pg_dump', dumpUrl, '--data-only', '--disable-triggers', '--no-owner'], { stdio: ['ignore', fd, 'inherit'] });
+  } catch (err) {
+    fs.closeSync(fd);
+    fs.rmSync(tmp, { force: true });
+    error('pull-db', `Falló pg_dump contra producción: ${err.message}`);
+    process.exit(1);
+  }
+  fs.closeSync(fd);
+
+  // 2) Vaciar las tablas locales (CASCADE para respetar las FK).
+  const tables = [
+    'knowledge_sources', 'knowledge_documents', 'knowledge_chunks',
+    'knowledge_embeddings', 'knowledge_tags', 'knowledge_document_tags',
+    'ingestion_jobs', 'conversations', 'bots', 'bot_settings',
+  ];
+  const truncateSql = `TRUNCATE ${tables.join(', ')} RESTART IDENTITY CASCADE;`;
+  console.log(`${DIM}2) Vaciando tablas locales…${RESET}`);
+  execFileSync('docker', ['exec', '-e', `PGPASSWORD=${localPass}`, container, 'psql', '-U', localUser, '-d', localDb, '-v', 'ON_ERROR_STOP=1', '-c', truncateSql], { stdio: 'inherit' });
+
+  // 3) Restaurar en local.
+  console.log(`${DIM}3) Restaurando en local…${RESET}`);
+  try {
+    // pg_dump 17 emite `SET transaction_timeout`, que el Postgres local (16) no
+    // reconoce; lo quitamos del volcado antes de restaurarlo.
+    const dump = fs.readFileSync(tmp, 'utf8').replace(/^SET transaction_timeout\s*=.*;$/gm, '');
+    execFileSync('docker', ['exec', '-i', '-e', `PGPASSWORD=${localPass}`, container, 'psql', '-U', localUser, '-d', localDb, '-v', 'ON_ERROR_STOP=1'], { input: dump, stdio: ['pipe', 'inherit', 'inherit'] });
+  } catch (err) {
+    fs.rmSync(tmp, { force: true });
+    error('pull-db', `Falló la restauración en local: ${err.message}`);
+    process.exit(1);
+  }
+  fs.rmSync(tmp, { force: true });
+
+  // 4) Verificación de conteos.
+  const countsSql = "SELECT 'sources=' || count(*) FROM knowledge_sources UNION ALL SELECT 'documents=' || count(*) FROM knowledge_documents UNION ALL SELECT 'chunks=' || count(*) FROM knowledge_chunks UNION ALL SELECT 'embeddings=' || count(*) FROM knowledge_embeddings UNION ALL SELECT 'bots=' || count(*) FROM bots UNION ALL SELECT 'bot_settings=' || count(*) FROM bot_settings UNION ALL SELECT 'conversations=' || count(*) FROM conversations;";
+  console.log(`${DIM}4) Conteos locales:${RESET}`);
+  execFileSync('docker', ['exec', '-e', `PGPASSWORD=${localPass}`, container, 'psql', '-U', localUser, '-d', localDb, '-tA', '-c', countsSql], { stdio: 'inherit' });
+
+  console.log(`\n${GREEN}✔${RESET} Pull DB completado.`);
 }

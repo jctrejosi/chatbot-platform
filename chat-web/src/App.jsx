@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import ReactDOM from 'react-dom';
-import { chat, getBots, createBot, deleteBot, updateBot, healthCheck, getSettings, updateSettings, resetSettings, sendTestEmail, getBotSettings, updateBotSettings, resetBotSettings, sendBotTestEmail, botChat, getBotKnowledge, uploadBotFile, deleteBotSource, getModels, getBotModels, getBotSourceDownloadUrl, getFunctions } from './api.js';
+import { ingestFile, chat, getBots, createBot, deleteBot, updateBot, healthCheck, getSettings, updateSettings, resetSettings, sendTestEmail, getBotSettings, updateBotSettings, resetBotSettings, sendBotTestEmail, botChat, getBotKnowledge, uploadBotFile, deleteBotSource, getModels, getBotModels, getBotSourceDownloadUrl, getFunctions } from './api.js';
 
 /* ─── Emojis disponibles para el ícono del bot ─── */
 const BOT_ICONS = [
@@ -208,6 +208,17 @@ function ChatPanel({ online, botId, botName, checking, onRetry, error, hasBots, 
 }
 
 /* ─── Upload Panel ────────────────────── */
+// Formatos aceptados para subir a knowledge-service (coinciden con el
+// extractor multi-formato del backend: PDF, DOCX, PPTX, XLSX, texto, etc.)
+const UPLOAD_ACCEPT = '.pdf,.docx,.pptx,.xlsx,.xls,.csv,.txt,.md,.html,.json,.xml,.yaml,.yml,.py,.js,.ts,.java,.cpp,.odt,.ods,.odp,.rtf';
+const UPLOAD_EXTENSIONS = UPLOAD_ACCEPT.split(',').map((s) => s.trim().toLowerCase());
+
+function isSupportedUpload(file) {
+  if (!file) return false;
+  const name = (file.name || '').toLowerCase();
+  return UPLOAD_EXTENSIONS.some((ext) => name.endsWith(ext));
+}
+
 function UploadPanel({ onRefresh }) {
   const [dragging, setDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -218,16 +229,17 @@ function UploadPanel({ onRefresh }) {
     e.preventDefault();
     setDragging(false);
     const file = e.dataTransfer.files[0];
-    if (file && file.type === 'application/pdf') {
+    if (isSupportedUpload(file)) {
       await handleUpload(file);
     } else {
-      setStatus('Solo se aceptan archivos PDF');
+      setStatus('Formato no soportado. Sube PDF, DOCX, XLSX, PPTX, TXT…');
     }
   };
 
   const handleFileSelect = async (e) => {
     const file = e.target.files?.[0];
-    if (file) await handleUpload(file);
+    if (file && isSupportedUpload(file)) await handleUpload(file);
+    else if (file) setStatus('Formato no soportado.');
   };
 
   const handleUpload = async (file) => {
@@ -236,7 +248,7 @@ function UploadPanel({ onRefresh }) {
     setProgress(10);
 
     try {
-      const result = await ingestPdf(file);
+      const result = await ingestFile(file);
       setStatus('Procesando... extrayendo texto');
 
       // Poll until done
@@ -279,11 +291,11 @@ function UploadPanel({ onRefresh }) {
         onDrop={handleDrop}
         onClick={() => document.getElementById('file-input').click()}
       >
-        {uploading ? '⏳ Procesando...' : 'Arrastra un PDF aquí\n o haz clic para seleccionar'}
+        {uploading ? '⏳ Procesando...' : 'Arrastra un archivo aquí\n (PDF, DOCX, XLSX, TXT…)'}
         <input
           id="file-input"
           type="file"
-          accept=".pdf"
+          accept={UPLOAD_ACCEPT}
           style={{ display: 'none' }}
           onChange={handleFileSelect}
         />

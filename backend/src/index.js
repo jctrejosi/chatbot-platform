@@ -199,10 +199,50 @@ app.get('/sources/:id', async (req, res) => {
 });
 
 app.post('/ingest', async (req, res) => {
+  const multer = require('multer');
+  const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } }).single('file');
+
+  const processUpload = () => new Promise((resolve, reject) => {
+    upload(req, res, (err) => {
+      if (err) return reject(err);
+      if (!req.file) return reject(new Error('file is required'));
+      resolve();
+    });
+  });
+
   try {
-    const data = await knowledgeProxy('post', '/ingest', { data: req.body });
+    await processUpload();
+
+    // Subir a Cloudinary para descarga futura (best-effort).
+    let cloudinaryUrl = null;
+    try {
+      const { uploadBuffer } = require('./cloudinary');
+      const cloudResult = await uploadBuffer(req.file.buffer, {
+        folder: 'knowledge',
+        original_filename: req.file.originalname,
+      });
+      cloudinaryUrl = cloudResult.url;
+    } catch (cloudErr) {
+      console.warn('Cloudinary upload failed (se procesa igual):', cloudErr.message);
+    }
+
+    // Reenviar al knowledge-service (extrae PDF, DOCX, XLSX, PPTX, texto, etc.).
+    const FormData = require('form-data');
+    const form = new FormData();
+    form.append('file', req.file.buffer, { filename: req.file.originalname, contentType: req.file.mimetype });
+    if (cloudinaryUrl) form.append('cloudinary_url', cloudinaryUrl);
+    const { data } = await axios.post(`${KNOWLEDGE_URL}/ingest`, form, {
+      headers: { ...form.getHeaders() },
+      maxBodyLength: Infinity,
+      maxContentLength: Infinity,
+    });
+
     res.json(data);
-  } catch (e) { res.status(502).json({ error: knowledgeError('/ingest') }); }
+  } catch (e) {
+    console.error('Upload error:', e.response?.data || e.message);
+    const upstream = e.response?.data?.detail || e.message;
+    res.status(502).json({ error: upstream || knowledgeError('/ingest') });
+  }
 });
 
 // Health check: no depende del knowledge-service (evita 502 si knowledge está caído)

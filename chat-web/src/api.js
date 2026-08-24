@@ -47,7 +47,7 @@ export async function getSource(id) {
   return handleResponse(res, `Error ${res.status} al cargar fuente`);
 }
 
-export async function ingestPdf(file) {
+export async function ingestFile(file) {
   const formData = new FormData();
   formData.append('file', file);
   const res = await fetch(`${API_URL}/ingest`, {
@@ -56,6 +56,9 @@ export async function ingestPdf(file) {
   });
   return handleResponse(res, `Error ${res.status} al subir archivo`);
 }
+
+/** Alias por compatibilidad: el endpoint ya acepta cualquier formato (PDF, DOCX…). */
+export const ingestPdf = ingestFile;
 
 export async function healthCheck() {
   try {
