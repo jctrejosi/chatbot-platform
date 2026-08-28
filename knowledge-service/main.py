@@ -170,6 +170,14 @@ async def ingest_file(file: UploadFile = File(...), bot_id: str = Form(None), cl
     async with pool.acquire() as conn:
         source_row = await conn.fetchrow("SELECT status, error_message FROM knowledge_sources WHERE id = $1", source_id)
 
+    # Si la ingesta falló (extracción vacía, error del pipeline, etc.), no
+    # devolver 200: el cliente debe ver el fallo en vez de un falso "cargado".
+    if source_row and source_row["status"] == "failed":
+        raise HTTPException(
+            500,
+            detail=f"Ingesta fallida: {source_row['error_message'] or 'error desconocido'}",
+        )
+
     return {
         "source_id": str(source_id),
         "job_id": str(job_id),

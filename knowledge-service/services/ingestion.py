@@ -11,7 +11,7 @@ from database import get_pool
 
 from .chunking import chunk_text
 from .embedding import embed_texts, embedding_enabled
-from .extraction import extract_pdf, extract_pdf_bytes
+from .extraction import extract_file_bytes
 
 
 # ─── Step logging ────────────────────────────────────────────────────────────
@@ -59,7 +59,15 @@ async def run_ingestion(job_id: str) -> None:
 
             if source["source_type"] == "file" and source["file_path"]:
                 full_path = source["file_path"]
-                result = extract_pdf(full_path)
+                # Extracción multi-formato (PDF, DOCX, XLSX, PPTX, texto, etc.),
+                # igual que en POST /ingest. extract_pdf solo lee PDFs y hacía
+                # que DOCX/XLSX/PPTX quedaran vacíos o fallaran.
+                with open(full_path, "rb") as f:
+                    file_bytes = f.read()
+                result = extract_file_bytes(
+                    file_bytes,
+                    source["original_filename"] or os.path.basename(full_path),
+                )
                 full_text = result.full_text
                 result_pages = result.pages
             elif source["source_type"] == "url":
@@ -99,6 +107,11 @@ async def run_ingestion(job_id: str) -> None:
             )
 
             chunks = chunk_text(full_text, strategy="sections")
+            if not chunks:
+                raise ValueError(
+                    "No se pudo extraer texto del archivo (0 fragmentos) — "
+                    + "el documento puede estar escaneado, vacío o ser un formato no soportado"
+                )
             await _log_step(conn, job_id, "chunking", f"Created {len(chunks)} chunks")
 
             # ── Step 5: Store chunks ──
