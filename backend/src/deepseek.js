@@ -395,13 +395,17 @@ async function callDeepSeek(messages, tools = null, attempt = 1, botId, conversa
  *
  * @returns {Promise<boolean>} true si hay datos no respaldados (bloquear respuesta).
  */
-async function hasUnsupportedData(content, chunks, toolResults = []) {
-  if (!content || !chunks || chunks.length === 0) return false;
+async function hasUnsupportedData(content, chunks, toolResults = [], userMessage = '') {
+  if (!content) return false;
+
+  const hasChunks = Array.isArray(chunks) && chunks.length > 0;
 
   try {
-    const context = chunks
-      .map((c, i) => `[${i + 1}] ${(c.content || '').substring(0, 400).replace(/\n/g, ' ')}`)
-      .join('\n---\n');
+    const context = hasChunks
+      ? chunks
+          .map((c, i) => `[${i + 1}] ${(c.content || '').substring(0, 400).replace(/\n/g, ' ')}`)
+          .join('\n---\n')
+      : '(NO HAY FRAGMENTOS DE CONOCIMIENTO: la base del bot está vacía)';
 
     // Datos verificados por el sistema (salida de funciones como calcular_presupuesto)
     const verifiedData = toolResults
@@ -415,6 +419,9 @@ IMPORTANTE:
 - Los fragmentos pueden estar en INGLÉS y la respuesta en ESPAÑOL. Evalúa el SIGNIFICADO, no las palabras exactas ni el idioma.
 - Los datos provenientes de las herramientas del sistema (cálculos de presupuesto, cronogramas, etc.) se consideran VERIFICADOS y válidos.
 - Los totales calculados a partir de precios base (por ejemplo, total = precio por persona × personas) son válidos.
+${hasChunks
+      ? ''
+      : '- La base de conocimiento está VACÍA: los datos concretos sobre la empresa (precios, fechas, servicios, características) solo pueden venir de las herramientas del sistema; cualquier otra afirmación concreta está inventada.\n- Saludar, ofrecer ayuda o decir que no tiene la información NO es inventar datos.\n- Repetir datos que el USUARIO mencionó en su propio mensaje NO es inventarlos.'}
 
 RESPUESTA DEL ASISTENTE:
 """${content.substring(0, 3000)}"""
@@ -423,6 +430,7 @@ FRAGMENTOS DE CONOCIMIENTO:
 ${context}
 
 ${verifiedData ? `\nDATOS VERIFICADOS DEL SISTEMA (de funciones):\n${verifiedData}` : ''}
+${userMessage ? `\nMENSAJE DEL USUARIO (solo para contexto):\n"""${userMessage.substring(0, 500)}"""` : ''}
 
 Responde ÚNICAMENTE con una palabra: "SI" si la respuesta inventa datos concretos no respaldados, o "NO" si toda la información está respaldada por los fragmentos o los datos verificados.`;
 
@@ -446,7 +454,7 @@ Responde ÚNICAMENTE con una palabra: "SI" si la respuesta inventa datos concret
   } catch (err) {
     // Fallback: verificación exacta de precios/números (independiente del idioma)
     console.warn('  🔍 LLM cross-ref fallback a precios/números:', err.message);
-    const allChunksText = chunks.map(c => (c.content || '')).join(' ').toLowerCase().replace(/,/g, '');
+    const allChunksText = (chunks || []).map(c => (c.content || '')).join(' ').toLowerCase().replace(/,/g, '');
     const dataPoints = [];
     (content.match(/\$[\d,.]+/g) || []).forEach(d => dataPoints.push(d));
     (content.match(/\b\d{3,}\b/g) || []).forEach(d => {
@@ -668,13 +676,20 @@ async function chatWithDeepSeek(userMessage, userName = 'Usuario', userId = 'unk
     //      los datos vienen del sistema y NO son inventados.
     const dataPreviouslyVerified = msg._emailSent || (msg._toolResults && msg._toolResults.filter(t => t.content && !t.content.includes('"ok":false')).length > 0);
     // El bloqueo solo aplica si el knowledge-service respondió y confirmó que no hay chunks
-    if (relevantChunks.length === 0 && !knowledgeUnavailable && content && !escalated && !emailSent && !dataPreviouslyVerified) {
+    if (relevantChunks.length === 0 && !knowledgeUnavailable && content && !dataPreviouslyVerified) {
+      // Fast-path regex (sin costo de API)
       const looksLikeKnowledge = (
         /\$[\d,]+/.test(content) ||           // menciona precios
         /\d{1,2}\s*(de|th|rd)\s/.test(content) ||  // menciona fechas
         /incluye|incluyen|ofrece|contiene/i.test(content)  // describe características
       );
-      if (looksLikeKnowledge) {
+      // … y LLM-as-judge para el resto: la base está vacía, así que cualquier
+      // dato concreto sobre la empresa es inventado (salvo datos de herramientas).
+      let fabricated = looksLikeKnowledge;
+      if (!fabricated) {
+        fabricated = await hasUnsupportedData(content, [], msg._toolResults || [], userMessage);
+      }
+      if (fabricated) {
         console.log('  🛑 Response blocked: no chunks in DB but model generated knowledge claims');
         content = 'No tengo esa información en mi base de conocimiento. ¿Quieres que contacte a un asesor?';
       }
