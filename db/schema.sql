@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS knowledge_sources (
     -- File upload
     original_filename VARCHAR(500),
     file_path         VARCHAR(1000),
-    file_type         VARCHAR(50),
+    file_type         VARCHAR(255),  -- MIME type; los de Office (DOCX/XLSX/PPTX) superan 50 chars
     file_size_bytes   BIGINT,
 
     -- URL
