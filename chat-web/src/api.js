@@ -89,6 +89,18 @@ export async function sendTestEmail() {
   return handleResponse(res, `Error ${res.status} al enviar correo de prueba`);
 }
 
+/** Valida la conexión con una instancia de whatsapp_history (canal vassago). */
+export async function validateVassagoConnection(patch = {}) {
+  const res = await fetch(`${API_URL}/settings/validate-vassago`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Error ${res.status} al validar la conexión`);
+  return data;
+}
+
 // ── Multi-bot APIs ──────────────────────
 
 export async function getBots() {

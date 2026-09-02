@@ -24,6 +24,10 @@ function envDefaults() {
     whatsappAccessToken: process.env.WHATSAPP_ACCESS_TOKEN || '',
     whatsappVerifyToken: process.env.WHATSAPP_VERIFY_TOKEN || '',
     whatsappPhone: process.env.WHATSAPP_PHONE || '',
+    // Canal de WhatsApp: 'meta' (Cloud API) o 'vassago' (WhatsApp Web vía
+    // whatsapp_history). Por bot se guarda en bot_settings (override).
+    whatsappChannel: process.env.WHATSAPP_CHANNEL || 'meta',
+    whatsappHistoryUrl: process.env.WHATSAPP_HISTORY_URL || '',
     minConfidence: parseFloat(process.env.MIN_CONFIDENCE || '0'),
     maxNegativeResponses: parseInt(process.env.MAX_NEGATIVE_RESPONSES || '5', 10),
     temperature: 0.7,
@@ -69,6 +73,8 @@ const VALIDATORS = {
   whatsappAccessToken: (v) => typeof v === 'string',
   whatsappVerifyToken: (v) => typeof v === 'string',
   whatsappPhone: (v) => typeof v === 'string',
+  whatsappChannel: (v) => v === 'meta' || v === 'vassago',
+  whatsappHistoryUrl: (v) => typeof v === 'string',
   systemPrompt: (v) => typeof v === 'string',
   welcomeMessage: (v) => typeof v === 'string',
   enabledFunctions: (v) => Array.isArray(v) && v.every((f) => typeof f === 'string' && f.trim().length > 0),
@@ -214,4 +220,29 @@ function clearSettingsCache(botId) {
   settingsCache.delete(cacheKey(botId));
 }
 
-module.exports = { getSettings, updateSettings, resetSettings, clearSettingsCache, findBotIdByPhoneNumber, botMatchesVerifyToken, ALLOWED_MODELS };
+/**
+ * Encuentra el bot configurado con canal 'vassago' (WhatsApp Web vía
+ * whatsapp_history) cuya sesión coincide con `sessionPhone` (el número de la
+ * cuenta conectada en whatsapp_history, con prefijo de país).
+ * Devuelve el bot_id o null (→ se usa la configuración global / env).
+ */
+async function findVassagoBotIdBySessionPhone(sessionPhone) {
+  if (!sessionPhone) return null;
+  try {
+    const { rows } = await query(
+      `SELECT bot_id FROM bot_settings
+       WHERE bot_id IS NOT NULL
+         AND settings->>'whatsappChannel' = 'vassago'
+         AND regexp_replace(settings->>'whatsappPhone', '\\D', '', 'g')
+             = regexp_replace($1, '\\D', '', 'g')
+       LIMIT 1`,
+      [sessionPhone]
+    );
+    return rows[0]?.bot_id || null;
+  } catch (err) {
+    console.warn('No se pudo resolver bot por sesión de whatsapp_history:', err.message);
+    return null;
+  }
+}
+
+module.exports = { getSettings, updateSettings, resetSettings, clearSettingsCache, findBotIdByPhoneNumber, findVassagoBotIdBySessionPhone, botMatchesVerifyToken, ALLOWED_MODELS };

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import ReactDOM from 'react-dom';
-import { ingestFile, chat, getBots, createBot, deleteBot, updateBot, healthCheck, getSettings, updateSettings, resetSettings, sendTestEmail, getBotSettings, updateBotSettings, resetBotSettings, sendBotTestEmail, botChat, getBotKnowledge, uploadBotFile, deleteBotSource, getModels, getBotModels, getBotSourceDownloadUrl, getFunctions } from './api.js';
+import { ingestFile, chat, getBots, createBot, deleteBot, updateBot, healthCheck, getSettings, updateSettings, resetSettings, sendTestEmail, validateVassagoConnection, getBotSettings, updateBotSettings, resetBotSettings, sendBotTestEmail, botChat, getBotKnowledge, uploadBotFile, deleteBotSource, getModels, getBotModels, getBotSourceDownloadUrl, getFunctions } from './api.js';
 
 /* ─── Emojis disponibles para el ícono del bot ─── */
 const BOT_ICONS = [
@@ -432,6 +432,7 @@ function SettingsPanel({ open, onClose, botId, botName, botIcon, creating, onCre
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState('');
+  const [testingConn, setTestingConn] = useState(false);
   const [tab, setTab] = useState('chat');
   // Inline name editing
   const [nameEdit, setNameEdit] = useState(false);
@@ -615,6 +616,20 @@ function SettingsPanel({ open, onClose, botId, botName, botIcon, creating, onCre
   };
 
   const save = async () => {
+    // Canal vassago: validar la conexión con whatsapp_history antes de guardar.
+    if (settings.whatsappChannel === 'vassago') {
+      const url = (settings.whatsappHistoryUrl || '').trim();
+      if (!url) {
+        setMsg('❌ Falta la URL del servicio whatsapp_history.');
+        return;
+      }
+      try {
+        await validateVassagoConnection({ whatsappHistoryUrl: url, whatsappPhone: settings.whatsappPhone });
+      } catch (e) {
+        setMsg('❌ ' + e.message);
+        return;
+      }
+    }
     setSaving(true);
     setMsg('');
     try {
@@ -662,6 +677,22 @@ function SettingsPanel({ open, onClose, botId, botName, botIcon, creating, onCre
       setMsg('❌ ' + e.message);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const testVassago = async () => {
+    setTestingConn(true);
+    setMsg('');
+    try {
+      const r = await validateVassagoConnection({
+        whatsappHistoryUrl: settings.whatsappHistoryUrl,
+        whatsappPhone: settings.whatsappPhone,
+      });
+      setMsg(`✅ Conexión OK con whatsapp_history${r.phone ? ` (sesión ${r.phone})` : ''}.`);
+    } catch (e) {
+      setMsg('❌ ' + e.message);
+    } finally {
+      setTestingConn(false);
     }
   };
 
@@ -984,21 +1015,21 @@ function SettingsPanel({ open, onClose, botId, botName, botIcon, creating, onCre
                         {s.status} · {s.file_type} {s.file_size_bytes ? `· ${(s.file_size_bytes / 1024).toFixed(1)} KB` : ''}
                       </div>
                     </div>
-                    <div style={{ display: 'flex', gap: 6 }}>
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                       {s.file_available ? (
                         <a
                           className="btn btn-secondary btn-sm"
                           href={botId ? getBotSourceDownloadUrl(botId, s.id) : '#'}
-                          download
-                          title="Descargar archivo"
-                        >⬇️</a>
+                          title={s.original_filename ? `Descargar ${s.original_filename}` : 'Descargar archivo'}
+                          style={{ textDecoration: 'none' }}
+                        >⬇️ Descargar</a>
                       ) : (
                         <button
                           className="btn btn-secondary btn-sm"
-                          style={{ opacity: 0.4 }}
-                          title="Archivo no disponible para descarga"
-                          onClick={() => setMsg('📁 Este archivo no está disponible para descarga. Solo se conserva en Cloudinary (plan gratuito: máximo 10 MB).')}
-                        >⬇️</button>
+                          style={{ opacity: 0.5 }}
+                          title="Archivo original no disponible"
+                          onClick={() => setMsg('📁 El archivo original no está disponible para descargar: solo existe en el servidor donde se subió y no tiene copia en Cloudinary (p. ej. superó el límite de 10 MB). Vuelve a subirlo desde aquí para que quede descargable.')}
+                        >⬇️ Descargar</button>
                       )}
                       <button className="btn btn-secondary btn-sm" onClick={() => handleDeleteSource(s.id)}>🗑️</button>
                     </div>
@@ -1026,35 +1057,108 @@ function SettingsPanel({ open, onClose, botId, botName, botIcon, creating, onCre
           {tab === 'whatsapp' && (
             <>
               <div className="settings-section">
-                <h3>🔗 Conexión WhatsApp</h3>
+                <h3>📱 Canal de WhatsApp</h3>
                 <p className="settings-hint">
-                  Credenciales de Meta for Developers.{' '}
-                  <a href="https://developers.facebook.com/docs/whatsapp/cloud-api/get-started" target="_blank" rel="noopener" style={{ color: 'var(--gold-light)' }}>
-                    Guía oficial →
-                  </a>
+                  Elige por qué canal este bot recibe y envía mensajes de WhatsApp.
                 </p>
 
-                <label className="settings-label">App ID <InfoTip text="Ve a Meta for Developers → Mis Apps → [tu app] → Configuración → Básica → App ID." /></label>
-                <input className="bot-name-input" type="text" placeholder="123456789" value={settings.whatsappAppId} onChange={(e) => set('whatsappAppId', e.target.value)} style={{ marginBottom: 8, width: '100%' }} />
-
-                <label className="settings-label">App Secret <InfoTip text="En el mismo lugar que el App ID (Configuración → Básica). Requiere verificación 2FA de Meta para verlo." /></label>
-                <input className="bot-name-input" type="password" placeholder="••••••••" value={settings.whatsappAppSecret} onChange={(e) => set('whatsappAppSecret', e.target.value)} style={{ marginBottom: 8, width: '100%' }} />
-
-                <label className="settings-label">WABA ID <InfoTip text="Ve a Meta Business Suite → WhatsApp Manager → tu cuenta de WhatsApp Business. El WABA ID sale en la URL o en 'Configuración de la cuenta'." /></label>
-                <input className="bot-name-input" type="text" placeholder="123456789" value={settings.whatsappWabaId} onChange={(e) => set('whatsappWabaId', e.target.value)} style={{ marginBottom: 8, width: '100%' }} />
-
-                <label className="settings-label">Phone Number ID <InfoTip text="En WhatsApp Manager → Teléfonos → selecciona tu número → copia el Phone Number ID (no es el número de teléfono, es un ID numérico)." /></label>
-                <input className="bot-name-input" type="text" placeholder="123456789" value={settings.whatsappPhoneNumberId} onChange={(e) => set('whatsappPhoneNumberId', e.target.value)} style={{ marginBottom: 8, width: '100%' }} />
-
-                <label className="settings-label">Access Token <InfoTip text="En Meta for Developers → [tu app] → WhatsApp → API Setup. Genera un token de acceso temporal (24h) o permanente. Requiere permisos: whatsapp_business_messaging y whatsapp_business_management. Si no lo pones, el sistema intenta generar uno automáticamente." /></label>
-                <input className="bot-name-input" type="password" placeholder="EAA..." value={settings.whatsappAccessToken} onChange={(e) => set('whatsappAccessToken', e.target.value)} style={{ marginBottom: 8, width: '100%' }} />
-
-                <label className="settings-label">Verify Token (webhook) <InfoTip text="Crea un token secreto cualquiera (ej: 'mi-token-2024'). En Meta, en Configuración del Webhook, pega este mismo token. Meta lo usará para verificar que el webhook es tuyo." /></label>
-                <input className="bot-name-input" type="text" placeholder="mi-token-secreto" value={settings.whatsappVerifyToken} onChange={(e) => set('whatsappVerifyToken', e.target.value)} style={{ marginBottom: 8, width: '100%' }} />
-
-                <label className="settings-label">Número de teléfono <InfoTip text="El número de WhatsApp Business registrado con el prefijo del país. Ej: +573001234567. Debe ser el número asociado al WABA y Phone Number ID ingresados arriba." /></label>
-                <input className="bot-name-input" type="text" placeholder="+1234567890" value={settings.whatsappPhone} onChange={(e) => set('whatsappPhone', e.target.value)} style={{ width: '100%' }} />
+                <label className="settings-label">Canal</label>
+                <select
+                  className="bot-name-input"
+                  value={settings.whatsappChannel || 'meta'}
+                  onChange={(e) => set('whatsappChannel', e.target.value)}
+                  style={{ marginBottom: 8, width: '100%' }}
+                >
+                  <option value="meta">☁️ Meta Cloud API (número de negocio)</option>
+                  <option value="vassago">📱 WhatsApp Web (servicio whatsapp_history)</option>
+                </select>
               </div>
+
+              {settings.whatsappChannel === 'vassago' ? (
+                <div className="settings-section">
+                  <h3>🔗 Conexión WhatsApp Web (whatsapp_history)</h3>
+                  <p className="settings-hint">
+                    Conecta este bot a una instancia de <b>whatsapp_history</b> (proyecto
+                    vassago) que tenga una sesión de WhatsApp Web montada. Los mensajes de los
+                    chats con el bot activado llegan aquí por webhook, y las respuestas salen por
+                    su <code>POST /api/send</code>.
+                  </p>
+
+                  <label className="settings-label">
+                    URL del servicio whatsapp_history{' '}
+                    <InfoTip text="Dirección base de whatsapp_history, p. ej. http://localhost:10000. Si montas varias instancias (varios WhatsApp Web), cada bot apunta a la suya. Debe ser alcanzable desde este backend." />
+                  </label>
+                  <input
+                    className="bot-name-input"
+                    type="text"
+                    placeholder="http://localhost:10000"
+                    value={settings.whatsappHistoryUrl}
+                    onChange={(e) => set('whatsappHistoryUrl', e.target.value)}
+                    style={{ marginBottom: 8, width: '100%' }}
+                  />
+
+                  <label className="settings-label">
+                    Número de la sesión WhatsApp Web{' '}
+                    <InfoTip text="El número de la cuenta conectada en esa instancia de whatsapp_history, con prefijo de país (ej: 5215512345678). Lo ves en su GET /api/status (campo phone) o en su lista de sesiones. Sirve para que este backend sepa que el mensaje es para este bot." />
+                  </label>
+                  <input
+                    className="bot-name-input"
+                    type="text"
+                    placeholder="5215512345678"
+                    value={settings.whatsappPhone}
+                    onChange={(e) => set('whatsappPhone', e.target.value)}
+                    style={{ width: '100%' }}
+                  />
+
+                  <p className="settings-hint" style={{ marginTop: 10 }}>
+                    En la instancia de whatsapp_history define{' '}
+                    <code>BOT_WEBHOOK_URL=http://localhost:3000/webhook/vassago</code> (y, si
+                    quieres protegerla, <code>BOT_WEBHOOK_SECRET</code> que debe coincidir con{' '}
+                    <code>WHATSAPP_HISTORY_WEBHOOK_SECRET</code> de este backend). Luego, en la
+                    interfaz de whatsapp_history, activa el bot en cada chat que este bot deba
+                    atender.
+                  </p>
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    style={{ marginTop: 10 }}
+                    disabled={testingConn}
+                    onClick={testVassago}
+                  >
+                    {testingConn ? '⏳ Probando…' : '🔌 Probar conexión'}
+                  </button>
+                </div>
+              ) : (
+                <div className="settings-section">
+                  <h3>🔗 Conexión WhatsApp (Meta Cloud API)</h3>
+                  <p className="settings-hint">
+                    Credenciales de Meta for Developers.{' '}
+                    <a href="https://developers.facebook.com/docs/whatsapp/cloud-api/get-started" target="_blank" rel="noopener" style={{ color: 'var(--gold-light)' }}>
+                      Guía oficial →
+                    </a>
+                  </p>
+
+                  <label className="settings-label">App ID <InfoTip text="Ve a Meta for Developers → Mis Apps → [tu app] → Configuración → Básica → App ID." /></label>
+                  <input className="bot-name-input" type="text" placeholder="123456789" value={settings.whatsappAppId} onChange={(e) => set('whatsappAppId', e.target.value)} style={{ marginBottom: 8, width: '100%' }} />
+
+                  <label className="settings-label">App Secret <InfoTip text="En el mismo lugar que el App ID (Configuración → Básica). Requiere verificación 2FA de Meta para verlo." /></label>
+                  <input className="bot-name-input" type="password" placeholder="••••••••" value={settings.whatsappAppSecret} onChange={(e) => set('whatsappAppSecret', e.target.value)} style={{ marginBottom: 8, width: '100%' }} />
+
+                  <label className="settings-label">WABA ID <InfoTip text="Ve a Meta Business Suite → WhatsApp Manager → tu cuenta de WhatsApp Business. El WABA ID sale en la URL o en 'Configuración de la cuenta'." /></label>
+                  <input className="bot-name-input" type="text" placeholder="123456789" value={settings.whatsappWabaId} onChange={(e) => set('whatsappWabaId', e.target.value)} style={{ marginBottom: 8, width: '100%' }} />
+
+                  <label className="settings-label">Phone Number ID <InfoTip text="En WhatsApp Manager → Teléfonos → selecciona tu número → copia el Phone Number ID (no es el número de teléfono, es un ID numérico)." /></label>
+                  <input className="bot-name-input" type="text" placeholder="123456789" value={settings.whatsappPhoneNumberId} onChange={(e) => set('whatsappPhoneNumberId', e.target.value)} style={{ marginBottom: 8, width: '100%' }} />
+
+                  <label className="settings-label">Access Token <InfoTip text="En Meta for Developers → [tu app] → WhatsApp → API Setup. Genera un token de acceso temporal (24h) o permanente. Requiere permisos: whatsapp_business_messaging y whatsapp_business_management. Si no lo pones, el sistema intenta generar uno automáticamente." /></label>
+                  <input className="bot-name-input" type="password" placeholder="EAA..." value={settings.whatsappAccessToken} onChange={(e) => set('whatsappAccessToken', e.target.value)} style={{ marginBottom: 8, width: '100%' }} />
+
+                  <label className="settings-label">Verify Token (webhook) <InfoTip text="Crea un token secreto cualquiera (ej: 'mi-token-2024'). En Meta, en Configuración del Webhook, pega este mismo token. Meta lo usará para verificar que el webhook es tuyo." /></label>
+                  <input className="bot-name-input" type="text" placeholder="mi-token-secreto" value={settings.whatsappVerifyToken} onChange={(e) => set('whatsappVerifyToken', e.target.value)} style={{ marginBottom: 8, width: '100%' }} />
+
+                  <label className="settings-label">Número de teléfono <InfoTip text="El número de WhatsApp Business registrado con el prefijo del país. Ej: +573001234567. Debe ser el número asociado al WABA y Phone Number ID ingresados arriba." /></label>
+                  <input className="bot-name-input" type="text" placeholder="+1234567890" value={settings.whatsappPhone} onChange={(e) => set('whatsappPhone', e.target.value)} style={{ width: '100%' }} />
+                </div>
+              )}
             </>
           )}
         </div>

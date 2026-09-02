@@ -80,7 +80,83 @@ async function getPhoneNumberId(config) {
   return preferred.id;
 }
 
+function isVassagoChannel(settings) {
+  const channel = (settings && settings.whatsappChannel) || process.env.WHATSAPP_CHANNEL || 'meta';
+  return channel === 'vassago';
+}
+
+/** URL base de un servicio whatsapp_history (settings del bot o env). */
+function historyBaseUrl(settings) {
+  const url = (settings && settings.whatsappHistoryUrl) || process.env.WHATSAPP_HISTORY_URL || '';
+  return url.replace(/\/+$/, '');
+}
+
+async function sendViaHistory(url, to, text) {
+  // whatsapp_history normaliza el destino: si es JID (contiene @) se usa tal
+  // cual; si es número, se le agrega @c.us. Los grupos requieren el JID completo.
+  const payload = String(to).includes('@') ? { id: to, message: text } : { phone: to, message: text };
+  const { data } = await axios.post(`${url}/api/send`, payload, { timeout: 30000 });
+  if (data && data.ok === false) throw new Error(data.error || 'whatsapp_history rechazó el envío');
+  return data;
+}
+
+/**
+ * Valida la conexión con una instancia de whatsapp_history (canal vassago):
+ *  1) que responda en /api/status,
+ *  2) que la sesión de WhatsApp Web esté "conectado",
+ *  3) que el número conectado coincida con el configurado (si se pasó).
+ * Devuelve { ok, error?, phone? } — nunca lanza.
+ */
+async function testVassagoConnection({ url, expectedPhone }) {
+  const base = (url || '').replace(/\/+$/, '');
+  if (!base) return { ok: false, error: 'Falta la URL del servicio whatsapp_history.' };
+
+  let data;
+  try {
+    const res = await axios.get(`${base}/api/status`, { timeout: 6000 });
+    data = res.data;
+  } catch (e) {
+    const detail = e.code === 'ECONNABORTED' ? 'timeout' : e.code === 'ECONNREFUSED' ? 'conexión rechazada' : e.code || e.message;
+    return { ok: false, error: `No se pudo conectar con ${base} (${detail}). ¿Está corriendo whatsapp_history?` };
+  }
+
+  const status = data && data.status;
+  const phone = (data && data.phone) || null;
+  if (!status) {
+    return { ok: false, error: `${base} respondió, pero /api/status no tiene el formato esperado.` };
+  }
+  if (status !== 'conectado') {
+    const hint =
+      status === 'esperando_qr'
+        ? ' La sesión está esperando el QR: escanéalo en la interfaz de whatsapp_history.'
+        : '';
+    return { ok: false, error: `La sesión de ${base} está "${status}" (debe estar "conectado").${hint}` };
+  }
+
+  if (expectedPhone) {
+    const digits = (s) => String(s || '').replace(/\D/g, '');
+    const a = digits(phone);
+    const b = digits(expectedPhone);
+    if (a && b && a !== b) {
+      return {
+        ok: false,
+        error: `La sesión conectada es ${phone || '(desconocido)'}, distinta del número configurado (${expectedPhone}). Revisa el campo "Número de la sesión WhatsApp Web".`,
+      };
+    }
+  }
+
+  return { ok: true, phone };
+}
+
 async function sendMessage(to, text, settings) {
+  if (isVassagoChannel(settings)) {
+    const url = historyBaseUrl(settings);
+    if (!url) {
+      throw new Error('Canal "vassago" sin URL: define whatsappHistoryUrl (settings del bot) o WHATSAPP_HISTORY_URL (env)');
+    }
+    return sendViaHistory(url, to, text);
+  }
+
   const cfg = buildConfig(settings);
   const token = await getAccessToken(cfg);
   const phoneNumberId = await getPhoneNumberId(cfg);
@@ -93,6 +169,11 @@ async function sendMessage(to, text, settings) {
 }
 
 async function markAsRead(sender, messageId, settings) {
+  if (isVassagoChannel(settings)) {
+    // En WhatsApp Web el visto se gestiona en la propia pestaña del navegador.
+    return { ok: true };
+  }
+
   const cfg = buildConfig(settings);
   const token = await getAccessToken(cfg);
   const phoneNumberId = await getPhoneNumberId(cfg);
@@ -103,4 +184,4 @@ async function markAsRead(sender, messageId, settings) {
   return data;
 }
 
-module.exports = { sendMessage, markAsRead, getPhoneNumberId, buildConfig };
+module.exports = { sendMessage, markAsRead, getPhoneNumberId, buildConfig, isVassagoChannel, testVassagoConnection };

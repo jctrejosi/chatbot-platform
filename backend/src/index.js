@@ -1,11 +1,12 @@
 require('dotenv').config();
 
+const crypto = require('crypto');
 const express = require('express');
 const cors = require('cors');
-const { sendMessage, markAsRead } = require('./whatsapp');
+const { sendMessage, markAsRead, testVassagoConnection } = require('./whatsapp');
 const { chatWithDeepSeek, listModels } = require('./deepseek');
 const { FUNCTION_CATALOG } = require('./functions');
-const { getSettings, updateSettings, resetSettings, findBotIdByPhoneNumber, botMatchesVerifyToken } = require('./settings');
+const { getSettings, updateSettings, resetSettings, findBotIdByPhoneNumber, findVassagoBotIdBySessionPhone, botMatchesVerifyToken } = require('./settings');
 const { sendEscalationEmail } = require('./escalation');
 const { getLogs } = require('./logger');
 const { listBots, createBot, deleteBot, updateBot } = require('./bot-manager');
@@ -83,6 +84,15 @@ app.post('/webhook', async (req, res) => {
     const settings = await getSettings(botId);
     if (botId) {
       console.log(`Mensaje para el bot ${botId} (${metadata?.display_phone_number})`);
+    }
+
+    // Los bots con canal 'vassago' no se atienden por el webhook de Meta: sus
+    // mensajes entran por POST /webhook/vassago.
+    if (settings.whatsappChannel !== 'meta') {
+      console.warn(
+        `Mensaje Meta ignorado: el bot ${botId || 'global'} está configurado con canal ${settings.whatsappChannel}`
+      );
+      return;
     }
 
     for (const msg of messages) {
@@ -183,6 +193,73 @@ async function knowledgeProxy(method, url, options = {}) {
 function knowledgeError(url) {
   return `Knowledge service unreachable (${KNOWLEDGE_URL}${url})`;
 }
+
+// ─── Webhook de whatsapp_history (vassago / WhatsApp Web) ──────────────────
+// whatsapp_history empuja aquí los mensajes entrantes de chats con el bot
+// activo (chats.bot_enabled). El bot se resuelve por el número de la sesión de
+// WhatsApp Web conectada, entre los bots con settings.whatsappChannel = 'vassago'.
+// Las respuestas se envían por POST {whatsappHistoryUrl}/api/send.
+const VASSAGO_WEBHOOK_SECRET = process.env.WHATSAPP_HISTORY_WEBHOOK_SECRET || '';
+
+function vassagoWebhookAuthorized(req) {
+  if (!VASSAGO_WEBHOOK_SECRET) return true; // sin secret configurado se acepta (red local)
+  const got = String(req.headers['x-webhook-secret'] || '');
+  const a = Buffer.from(got);
+  const b = Buffer.from(VASSAGO_WEBHOOK_SECRET);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+app.post('/webhook/vassago', async (req, res) => {
+  // Responder 200 de inmediato: whatsapp_history no reintenta.
+  res.sendStatus(200);
+
+  try {
+    if (!vassagoWebhookAuthorized(req)) {
+      console.warn('[webhook-vassago] Secreto de webhook inválido; mensaje ignorado.');
+      return;
+    }
+
+    const { session_phone, chat, message } = req.body || {};
+    if (!message || !session_phone) return;
+    const text = message.body;
+    if (typeof text !== 'string' || !text.trim()) return;
+
+    // Resolver el bot cuyo canal es 'vassago' y cuya sesión coincide. Si no hay
+    // bot (botId null) se usa la configuración global/env, que debe tener
+    // WHATSAPP_CHANNEL=vassago para responder por este canal.
+    const botId = await findVassagoBotIdBySessionPhone(session_phone);
+    const settings = await getSettings(botId);
+    if (settings.whatsappChannel !== 'vassago') {
+      console.warn(`[webhook-vassago] Sin bot con canal vassago para la sesión ${session_phone}; se ignora.`);
+      return;
+    }
+
+    const senderPhone = message.phone || (chat && chat.phone) || '';
+    // Destino de la respuesta: el JID completo del chat (soporta @c.us, @g.us
+    // y también los chats nuevos @lid), no solo el número — los @lid no se
+    // alcanzan con @c.us.
+    const replyTarget = (chat && chat.id) || senderPhone;
+    const senderName = message.name || (chat && chat.name) || senderPhone;
+    console.log(`[webhook-vassago] Mensaje de ${senderName} (${senderPhone}): "${text.slice(0, 80)}"`);
+
+    const result = await chatWithDeepSeek(text, senderName, senderPhone, botId);
+    const aiResponse = result.answer;
+
+    // Guardar la conversación (best-effort, no bloquea la respuesta).
+    knowledge.post('/conversations', {
+      user_id: senderPhone,
+      user_name: senderName,
+      message: text,
+      response: aiResponse,
+      chunks_used: [],
+    }).catch((err) => console.warn('Conversation save failed:', err.message));
+
+    await sendMessage(replyTarget, aiResponse, settings);
+    console.log(`[webhook-vassago] Respuesta enviada a ${replyTarget} vía whatsapp_history`);
+  } catch (error) {
+    console.error('[webhook-vassago] Error procesando mensaje:', error.message);
+  }
+});
 
 app.get('/sources', async (req, res) => {
   try {
@@ -464,10 +541,31 @@ app.delete('/bots/:id/knowledge/:sourceId', async (req, res) => {
 });
 
 app.get('/bots/:id/knowledge/:sourceId/download', async (req, res) => {
+  const downloadUrl = `/sources/${req.params.sourceId}/download`;
   try {
-    const upstream = await knowledge.get(`/sources/${req.params.sourceId}/download`, { responseType: 'stream' });
+    // Nombre original de la fuente (para forzar attachment con buen filename).
+    let originalName = null;
+    try {
+      const meta = await knowledge.get(`/sources/${req.params.sourceId}`, { timeout: 8000 });
+      originalName = meta.data?.source?.original_filename || null;
+    } catch { /* si el meta falla seguimos sin nombre */ }
+
+    // 1er intento sin seguir redirects: si el original está en Cloudinary, el
+    // knowledge-service responde 3xx; lo seguimos y streamamos igual, forzando
+    // Content-Disposition: attachment con el nombre original abajo.
+    let upstream = await knowledge.get(downloadUrl, { responseType: 'stream', maxRedirects: 0, validateStatus: () => true });
+    if (upstream.status >= 300 && upstream.status < 400 && upstream.headers.location) {
+      upstream = await knowledge.get(downloadUrl, { responseType: 'stream' });
+    }
+
     res.set('Content-Type', upstream.headers['content-type'] || 'application/octet-stream');
-    if (upstream.headers['content-disposition']) {
+    if (originalName) {
+      const ascii = originalName.replace(/[^\x20-\x7E]/g, '_').replace(/"/g, "'");
+      res.set(
+        'Content-Disposition',
+        `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(originalName)}`
+      );
+    } else if (upstream.headers['content-disposition']) {
       res.set('Content-Disposition', upstream.headers['content-disposition']);
     }
     upstream.data.pipe(res);
@@ -476,7 +574,7 @@ app.get('/bots/:id/knowledge/:sourceId/download', async (req, res) => {
       return res.status(404).json({ error: 'El archivo original no está disponible en este servidor' });
     }
     console.error('Download proxy FAILED:', e.code || e.message);
-    res.status(502).json({ error: knowledgeError(`/sources/${req.params.sourceId}/download`) });
+    res.status(502).json({ error: knowledgeError(downloadUrl) });
   }
 });
 
@@ -510,6 +608,22 @@ app.put('/settings', async (req, res) => {
 app.post('/settings/reset', async (req, res) => {
   try { res.json(await resetSettings()); }
   catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// POST /settings/validate-vassago — prueba la conexión con una instancia de
+// whatsapp_history antes de guardar la configuración del canal vassago.
+app.post('/settings/validate-vassago', async (req, res) => {
+  try {
+    const current = await getSettings();
+    const body = req.body || {};
+    const url = body.whatsappHistoryUrl || current.whatsappHistoryUrl || '';
+    const phone = body.whatsappPhone || current.whatsappPhone || '';
+    const r = await testVassagoConnection({ url, expectedPhone: phone });
+    if (r.ok) return res.json({ ok: true, status: 'conectado', phone: r.phone });
+    res.status(400).json({ ok: false, error: r.error });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 // POST /settings/test-email
