@@ -10,9 +10,9 @@
 #   - puede conectar a la DB local (knowledge-db en localhost:5434) si DATABASE_URL
 #     apunta a ella (por defecto knowledge-service/.env apunta a Supabase).
 #
-# ⚠️ No levantes el knowledge-service del host a la vez. Si usás `node start.js`,
+# ⚠️ No levantes el knowledge-service del host a la vez. Si usás `node dev.js`,
 #    pasale el flag --ks-docker para que no monte otro en :8000:
-#      node start.js --ks-docker
+#      node dev.js --ks-docker
 name: knowledge-service
 
 services:

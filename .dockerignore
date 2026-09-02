@@ -9,7 +9,7 @@ logs-prod/
 .git/
 .gitignore
 *.md
-start.js
+dev.js
 package.json
 package-lock.json
 Dockerfile

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * start.js — Orquestador de desarrollo (monta en background + terminal de logs).
+ * dev.js — Orquestador de desarrollo (monta en background + terminal de logs).
  *
  * Monta los tres servicios en segundo plano (sobreviven al cierre de esta
  * terminal) y abre una terminal por servicio con sus logs en vivo
@@ -10,13 +10,18 @@
  *   knowledge-service  → FastAPI/uvicorn       → http://localhost:8000
  *
  * Uso:
- *   node start.js                 monta los servicios y abre una terminal de logs por servicio
- *   node start.js --stop          detiene los servicios (mata lo que ocupe sus puertos)
- *   node start.js --pull-db       trae TODOS los datos de producción (Supabase) a la base local
- *   node start.js --pull-logs     baja logs de producción a logs-prod/ (Render + Supabase; requiere RENDER_API_KEY, opcional SUPABASE_ACCESS_TOKEN)
- *   node start.js --ks-docker     knowledge-service ya corre en Docker (no lo monta en el host)
- *   node start.js --no-reload     desactiva hot-reload de los 3 servicios
- *   node start.js --external      fuerza ventanas de terminal del sistema aunque estés en Zed
+ *   node dev.js                  monta los servicios y abre una terminal de logs por servicio
+ *   node dev.js --stop           detiene los servicios (mata lo que ocupe sus puertos)
+ *   node dev.js --pull-db        trae TODOS los datos de producción (Supabase) a la base local
+ *   node dev.js --pull-logs      baja logs de producción a logs-prod/ (Render + Supabase; requiere RENDER_API_KEY, opcional SUPABASE_ACCESS_TOKEN)
+ *   node dev.js --ks-docker      knowledge-service ya corre en Docker (no lo monta en el host)
+ *   node dev.js --no-reload      desactiva hot-reload de los 3 servicios
+ *   node dev.js --external       fuerza ventanas de terminal del sistema aunque estés en Zed
+ *
+ * Antes de montar valida las dependencias:
+ *   - backend y chat-web: si falta algo en node_modules, ejecuta `npm install`
+ *     automáticamente en ese servicio.
+ *   - knowledge-service: crea/usa su .venv (detalle abajo).
  *
  * Si se ejecuta dentro del terminal integrado de Zed, no abre ventanas
  * (Zed no permite abrir paneles de terminal desde un script) y en su lugar
@@ -53,7 +58,7 @@ const os = require('node:os');
 
 const ROOT = __dirname;
 const LOG_DIR = path.join(ROOT, 'logs');
-const PID_FILE = path.join(LOG_DIR, '.start.pid'); // pids montados, para --stop
+const PID_FILE = path.join(LOG_DIR, '.dev.pid'); // pids montados, para --stop
 
 // ─── Colores de salida ────────────────────────────────────────────────────
 const RESET = '\x1b[0m';
@@ -295,7 +300,7 @@ function safeKill(pid, signal) {
     process.kill(pid, signal);
   } catch (err) {
     if (err.code !== 'ESRCH') {
-      warn('start', `No pude enviar ${signal} al PID ${pid}: ${err.message}`);
+      warn('dev', `No pude enviar ${signal} al PID ${pid}: ${err.message}`);
     }
   }
 }
@@ -387,7 +392,7 @@ function mount(service) {
     process.exit(1);
   }
   fs.closeSync(fd);
-  child.unref(); // start.js puede terminar; los servicios siguen corriendo
+  child.unref(); // dev.js puede terminar; los servicios siguen corriendo
   child.on('error', (err) => {
     error(service.name, `No se pudo iniciar: ${err.message}. Log: ${logPath}`);
   });
@@ -577,8 +582,45 @@ function openLogsTerminals() {
   }
 
   if (!term) {
-    warn('start', 'No encontré un emulador de terminal para abrir los logs. Ábrelos tú mismo con los comandos de arriba.');
+    warn('dev', 'No encontré un emulador de terminal para abrir los logs. Ábrelos tú mismo con los comandos de arriba.');
   }
+}
+
+// ─── Dependencias npm: validar / instalar ─────────────────────────────────
+// Devuelve los paquetes (deps + devDeps) declarados en package.json que no
+// están instalados en su node_modules (p. ej. tras un clonado sin npm install).
+function missingNpmDeps(service) {
+  let manifest = null;
+  try {
+    manifest = JSON.parse(fs.readFileSync(path.join(service.cwd, 'package.json'), 'utf8'));
+  } catch {}
+  if (!manifest) return ['(package.json ilegible o inexistente)'];
+  const missing = [];
+  for (const name of Object.keys({ ...manifest.dependencies, ...manifest.devDependencies })) {
+    if (!fs.existsSync(path.join(service.cwd, 'node_modules', name))) missing.push(name);
+  }
+  return missing;
+}
+
+// Comprueba que el node_modules de un servicio esté completo y, si no, ejecuta
+// `npm install` en su directorio. Devuelve false si la instalación falla.
+function ensureNpmDeps(service) {
+  const missing = missingNpmDeps(service);
+  if (missing.length === 0) {
+    console.log(`${COLORS[service.name]}[${service.name}]${RESET} Dependencias OK (node_modules completo).`);
+    return true;
+  }
+  console.log(
+    `${COLORS[service.name]}[${service.name}]${RESET} Faltan dependencias (${missing.join(', ')}) — instalando…`,
+  );
+  try {
+    execFileSync('npm', ['install'], { cwd: service.cwd, stdio: 'inherit' });
+  } catch {
+    error(service.name, 'Falló npm install. Revisa el error de arriba y reintenta.');
+    return false;
+  }
+  console.log(`${COLORS[service.name]}[${service.name}]${RESET} Dependencias instaladas (node_modules).`);
+  return true;
 }
 
 // ─── Principal ────────────────────────────────────────────────────────────
@@ -711,11 +753,11 @@ async function main() {
   }
 
   // ── Preflight ──
+  // Dependencias npm (backend y chat-web): si falta algo en node_modules se
+  // instala automáticamente antes de montar los servicios.
   for (const s of services) {
     if (s.name === 'knowledge-service') continue;
-    if (!fs.existsSync(path.join(s.cwd, 'node_modules'))) {
-      warn(s.name, `Faltan dependencias: ejecuta "npm install" en ${path.relative(ROOT, s.cwd)}`);
-    }
+    if (!ensureNpmDeps(s)) process.exit(1);
   }
   if (!fs.existsSync(path.join(ROOT, 'backend', '.env'))) {
     warn('backend', 'No hay .env en backend/ (se usan defaults; revisa backend/.env.example)');
@@ -770,8 +812,8 @@ async function main() {
     for (const r of notReady) {
       warn(r.name, `no respondió en ${r.url} (revisa logs/${r.name}.log)`);
     }
-    error('start', 'Algunos servicios no quedaron listos; no se muestran los puertos.');
-    console.log(`${DIM}Los procesos quedaron montados en background; revisa logs/*.log. Detener todo → node start.js --stop${RESET}`);
+    error('dev', 'Algunos servicios no quedaron listos; no se muestran los puertos.');
+    console.log(`${DIM}Los procesos quedaron montados en background; revisa logs/*.log. Detener todo → node dev.js --stop${RESET}`);
     return;
   }
 
@@ -790,12 +832,12 @@ ${BOLD}Servicios montados en background:${RESET}
   ${DIM}DB (si hace falta) → cd db && docker compose up -d${RESET}
 
 ${DIM}${logsHint}${RESET}
-${DIM}Detener todo → node start.js --stop${RESET}
+${DIM}Detener todo → node dev.js --stop${RESET}
 `);
 }
 
 main().catch((err) => {
-  error('start', err.message);
+  error('dev', err.message);
   process.exit(1);
 });
 
@@ -953,7 +995,7 @@ async function pullProductionLogs() {
       console.log(`${GREEN}✔${RESET} backend: ${entries.length} entradas → logs-prod/backend.log (+ backend.json)`);
     } catch (e) {
       error('pull-logs', `No se pudo obtener logs de ${prodUrl}/logs: ${e.message}`);
-      console.log(`${DIM}  ¿URL de producción correcta? Pásala con: node start.js --pull-logs --prod-url https://<tu-backend>.onrender.com${RESET}`);
+      console.log(`${DIM}  ¿URL de producción correcta? Pásala con: node dev.js --pull-logs --prod-url https://<tu-backend>.onrender.com${RESET}`);
       console.log(`${DIM}  Para logs completos de Render define RENDER_API_KEY (y opcional RENDER_OWNER_ID).${RESET}`);
       process.exitCode = 1;
     }
