@@ -11,6 +11,8 @@
  *
  * Uso:
  *   node dev.js                  monta los servicios y abre una terminal de logs por servicio
+ *   node dev.js --install        solo valida/instala dependencias (npm y .venv) y sale
+ *   node dev.js --clean          borra node_modules (y package-lock) y reinstala desde cero
  *   node dev.js --stop           detiene los servicios (mata lo que ocupe sus puertos)
  *   node dev.js --pull-db        trae TODOS los datos de producción (Supabase) a la base local
  *   node dev.js --pull-logs      baja logs de producción a logs-prod/ (Render + Supabase; requiere RENDER_API_KEY, opcional SUPABASE_ACCESS_TOKEN)
@@ -18,9 +20,14 @@
  *   node dev.js --no-reload      desactiva hot-reload de los 3 servicios
  *   node dev.js --external       fuerza ventanas de terminal del sistema aunque estés en Zed
  *
+ * Funciona en Linux, macOS y Windows: detecta la plataforma y usa los comandos
+ * nativos de cada una (taskkill/netstat/where/PowerShell y npm.cmd en Windows;
+ * lsof/ss/ps/which/bash y npm en Linux y macOS).
+ *
  * Antes de montar valida las dependencias:
  *   - backend y chat-web: si falta algo en node_modules, ejecuta `npm install`
- *     automáticamente en ese servicio.
+ *     automáticamente en ese servicio. Si la instalación falla, borra
+ *     node_modules (y el lockfile si hace falta) y reinstala desde cero.
  *   - knowledge-service: crea/usa su .venv (detalle abajo).
  *
  * Si se ejecuta dentro del terminal integrado de Zed, no abre ventanas
@@ -60,6 +67,13 @@ const ROOT = __dirname;
 const LOG_DIR = path.join(ROOT, 'logs');
 const PID_FILE = path.join(LOG_DIR, '.dev.pid'); // pids montados, para --stop
 
+// ─── Plataforma ───────────────────────────────────────────────────────────
+// En Windows los ejecutables globales son .cmd y varias utilidades de Unix
+// (lsof, ss, ps, which, tail, bash, sleep) no existen: cada bloque que las usa
+// tiene su variante nativa (taskkill, netstat, where, PowerShell, npm.cmd).
+const IS_WINDOWS = process.platform === 'win32';
+const NPM = IS_WINDOWS ? 'npm.cmd' : 'npm';
+
 // ─── Colores de salida ────────────────────────────────────────────────────
 const RESET = '\x1b[0m';
 const DIM = '\x1b[2m';
@@ -75,6 +89,8 @@ const COLORS = {
 
 const reload = !process.argv.includes('--no-reload');
 const stop = process.argv.includes('--stop');
+const clean = process.argv.includes('--clean') || process.argv.includes('--reinstall');
+const installOnly = process.argv.includes('--install') || process.argv.includes('--deps');
 const forceExternal = process.argv.includes('--external');
 const pullDb = process.argv.includes('--pull-db');
 const ksDocker = process.argv.includes('--ks-docker');
@@ -97,7 +113,7 @@ const services = [
   {
     name: 'backend',
     cwd: path.join(ROOT, 'backend'),
-    command: 'npm',
+    command: NPM,
     args: ['run', reload ? 'dev' : 'start'],
     env: { PORT: process.env.BACKEND_PORT || '3000' },
     port: Number(process.env.BACKEND_PORT || 3000),
@@ -105,7 +121,7 @@ const services = [
   {
     name: 'chat-web',
     cwd: path.join(ROOT, 'chat-web'),
-    command: 'npm',
+    command: NPM,
     args: ['run', 'dev', '--', '--port', process.env.WEB_PORT || '5173', '--strictPort'],
     env: {},
     port: Number(process.env.WEB_PORT || 5173),
@@ -251,11 +267,27 @@ function isPortInUse(port) {
 }
 
 // PIDs que ESCUCHAN en `port` (no clientes conectados):
-//   1) lsof (Linux/macOS) filtrando solo sockets en estado LISTEN;
-//   2) ss (Linux) como fallback si lsof no está instalado.
+//   - Windows: netstat -ano (filtra LISTENING);
+//   - Linux/macOS: lsof filtrando sockets LISTEN, y ss como fallback.
 // Nota: `-t` debe ir como flag separado; `-ti` empaquetado hace que lsof
 // ignore el filtro de puerto y liste todos los listeners.
 function pidsOnPort(port) {
+  if (IS_WINDOWS) {
+    try {
+      const out = execFileSync('netstat', ['-ano'], { stdio: ['ignore', 'pipe', 'ignore'] }).toString();
+      // "  TCP  0.0.0.0:3000  0.0.0.0:0  LISTENING  1234"
+      const re = new RegExp(`[:.]${port}\\s+\\S+\\s+LISTENING\\s+(\\d+)`, 'gi');
+      const pids = new Set();
+      let m;
+      while ((m = re.exec(out)) !== null) {
+        const n = Number(m[1]);
+        if (Number.isInteger(n) && n > 0) pids.add(n);
+      }
+      return [...pids];
+    } catch {
+      return [];
+    }
+  }
   try {
     const out = execFileSync('lsof', ['-t', '-iTCP:' + port, '-sTCP:LISTEN'], {
       stdio: ['ignore', 'pipe', 'ignore'],
@@ -282,6 +314,21 @@ function pidsOnPort(port) {
 }
 
 function parentPidOf(pid) {
+  if (IS_WINDOWS) {
+    try {
+      const ps = `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").ParentProcessId`;
+      const out = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], {
+        stdio: ['ignore', 'pipe', 'ignore'],
+        windowsHide: true,
+      })
+        .toString()
+        .trim();
+      const n = Number(out);
+      return Number.isInteger(n) && n > 1 ? n : null;
+    } catch {
+      return null;
+    }
+  }
   try {
     const out = execFileSync('ps', ['-o', 'ppid=', '-p', String(pid)], {
       stdio: ['ignore', 'pipe', 'ignore'],
@@ -296,6 +343,18 @@ function parentPidOf(pid) {
 }
 
 function safeKill(pid, signal) {
+  if (IS_WINDOWS) {
+    // En Windows no hay señales POSIX: taskkill /T /F mata el árbol entero.
+    try {
+      execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], {
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+    } catch {
+      // El proceso ya no existe (o no tenemos permiso): nada que hacer.
+    }
+    return;
+  }
   try {
     process.kill(pid, signal);
   } catch (err) {
@@ -333,9 +392,13 @@ async function freePort(port, label) {
   // Siguen vivos: matar a los que queden y a su proceso padre.
   pids = pidsOnPort(port);
   const tree = new Set(pids);
-  for (const pid of pids) {
-    const parent = parentPidOf(pid);
-    if (parent) tree.add(parent);
+  // En Windows `taskkill /T` ya mata el árbol completo, y el "padre" de un
+  // proceso del servicio puede ser la shell del usuario: no lo tocamos.
+  if (!IS_WINDOWS) {
+    for (const pid of pids) {
+      const parent = parentPidOf(pid);
+      if (parent) tree.add(parent);
+    }
   }
   console.log(
     `${YELLOW}⚠ [${label}]${RESET} PID(s) ${[...tree].join(', ')} no ceden. Enviando SIGKILL…`,
@@ -358,13 +421,25 @@ function rememberPid(name, pid) {
 }
 
 function commandExists(cmd) {
-  if (cmd.includes('/')) return fs.existsSync(cmd);
+  if (cmd.includes('/') || cmd.includes('\\')) return fs.existsSync(cmd);
+  const bin = IS_WINDOWS ? 'where' : 'which';
   try {
-    execFileSync('which', [cmd], { stdio: 'ignore' });
+    execFileSync(bin, [cmd], { stdio: 'ignore', windowsHide: true });
     return true;
   } catch {
     return false;
   }
+}
+
+// Intérprete de Python a usar para crear el .venv. En Windows es `python`
+// (o el lanzador `py`); en Linux/macOS, `python3`.
+function findPython() {
+  if (process.env.PYTHON) return process.env.PYTHON;
+  const candidates = IS_WINDOWS ? ['python', 'py'] : ['python3', 'python'];
+  for (const c of candidates) {
+    if (commandExists(c)) return c;
+  }
+  return candidates[0];
 }
 
 // Arranca el servicio desacoplado de esta terminal (detached: nueva sesión,
@@ -385,6 +460,10 @@ function mount(service) {
       env: { ...process.env, ...service.env },
       stdio: ['ignore', fd, fd],
       detached: true,
+      // En Windows .cmd (npm.cmd) se resuelve vía shell; windowsHide evita que
+      // se abra/parpadee una consola extra.
+      shell: IS_WINDOWS,
+      windowsHide: true,
     });
   } catch (err) {
     fs.closeSync(fd);
@@ -438,6 +517,7 @@ function mountDbLogs() {
     child = spawn('docker', ['logs', '-f', '--tail', '100', target], {
       stdio: ['ignore', fd, fd],
       detached: true,
+      windowsHide: true,
     });
   } catch (err) {
     fs.closeSync(fd);
@@ -494,11 +574,18 @@ function dbContainer() {
 
 // Abre una terminal por fuente de logs: backend, chat-web, knowledge-service
 // y db (los tres primeros leen logs/*.log; db lee logs/db.log, que escribe
-// el follower de `docker logs` en background). Cada ventana hace `tail -f`.
+// el follower de `docker logs` en background). Cada ventana sigue el log en
+// vivo (`tail -f` en Linux/macOS, `Get-Content -Wait` en Windows).
 // Dentro de Zed no se pueden abrir paneles desde un script, así que en ese
 // caso imprime los comandos listos para pegar en paneles de terminal de Zed.
 function openLogsTerminals() {
-  const tailLog = (file) => `tail -n 100 -f ${shQuote(path.join(LOG_DIR, file))}`;
+  const isWin = IS_WINDOWS;
+  const fullLogPath = (file) => path.join(LOG_DIR, file);
+  // Comando para seguir un log en vivo, según la plataforma.
+  const tailLog = (file) =>
+    isWin
+      ? `Get-Content -Path '${fullLogPath(file).replace(/'/g, "''")}' -Wait -Tail 100`
+      : `tail -n 100 -f ${shQuote(fullLogPath(file))}`;
   const sources = [
     { title: 'backend', cmd: tailLog('backend.log') },
     { title: 'chat-web', cmd: tailLog('chat-web.log') },
@@ -512,19 +599,45 @@ function openLogsTerminals() {
         `${RESET} (el CLI de Zed solo abre archivos/workspaces).\n` +
         `Abre el panel de terminal (${DIM}Ctrl+\`${RESET}), crea más con ${DIM}Ctrl+~${RESET} ` +
         `(o ${DIM}Ctrl+N${RESET} estando en el panel; ${DIM}Ctrl+Shift+5${RESET} divide) ` +
-        `y pega un comando en cada panel — el prefijo printf pone el título:`,
+        `y pega un comando en cada panel${isWin ? ':' : ' — el prefijo printf pone el título:'}`,
     );
     for (const src of sources) {
-      console.log(
-        `\n  ${GREEN}${src.title}${RESET}\n` +
-          `  ${BOLD}printf '\\e]2;${src.title} · logs\\007'; ${src.cmd}${RESET}`,
-      );
+      const prefix = isWin ? '' : `printf '\\e]2;${src.title} · logs\\007'; `;
+      console.log(`\n  ${GREEN}${src.title}${RESET}\n  ${BOLD}${prefix}${src.cmd}${RESET}`);
     }
     console.log('');
     return;
   }
 
-  // Formato de invocación por emulador (todos lanzan `bash -c "<script>"`).
+  // Windows: una ventana de PowerShell por log (equivale a `tail -f`).
+  if (isWin) {
+    let opened = 0;
+    for (const src of sources) {
+      const psScript =
+        `$host.ui.RawUI.WindowTitle = '${src.title} - logs'; ` +
+        `${src.cmd}; Write-Host ''; ` +
+        `Write-Host '[Logs terminados - la ventana sigue abierta]'`;
+      try {
+        // `start ""` abre una ventana nueva; el título lo fija PowerShell.
+        const child = spawn(
+          'cmd.exe',
+          ['/c', 'start', '', 'powershell.exe', '-NoExit', '-Command', psScript],
+          { detached: true, stdio: 'ignore', windowsHide: true },
+        );
+        child.unref();
+        console.log(`${GREEN}✔${RESET} Logs de ${src.title} → ventana nueva (PowerShell).`);
+        opened++;
+      } catch {
+        console.log(`  ${DIM}[${src.title}]${RESET} ${src.cmd}`);
+      }
+    }
+    if (!opened) {
+      warn('dev', 'No pude abrir ventanas de logs. Ábrelos tú mismo con los comandos de arriba.');
+    }
+    return;
+  }
+
+  // Linux/macOS: formato de invocación por emulador (todos lanzan `bash -c`).
   const byTerm = {
     'x-terminal-emulator': (s) => ['-e', 'bash', '-c', s],
     'gnome-terminal': (s) => ['--', 'bash', '-c', s],
@@ -602,9 +715,81 @@ function missingNpmDeps(service) {
   return missing;
 }
 
+// Borra una carpeta de forma robusta (en Windows el borrado recursivo puede
+// fallar por archivos bloqueados, así que se reintenta).
+function removeDir(dir) {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
+    return !fs.existsSync(dir);
+  } catch {
+    try {
+      if (IS_WINDOWS) {
+        execFileSync('cmd', ['/c', 'rmdir', '/s', '/q', dir], { stdio: 'ignore', windowsHide: true });
+      } else {
+        execFileSync('rm', ['-rf', dir], { stdio: 'ignore' });
+      }
+      return !fs.existsSync(dir);
+    } catch {
+      return false;
+    }
+  }
+}
+
+// Instala dependencias de un servicio con `npm install`. Si falla, reintenta en
+// escalada: 1) borra node_modules; 2) si aún falla, borra también el lockfile
+// para reconstruir todo desde cero. Devuelve false si todo falla.
+function npmInstall(service, { wipe = false } = {}) {
+  const nodeModules = path.join(service.cwd, 'node_modules');
+  const lockFile = path.join(service.cwd, 'package-lock.json');
+  const run = () => {
+    try {
+      execFileSync(NPM, ['install'], {
+        cwd: service.cwd,
+        stdio: 'inherit',
+        // En Windows .cmd (npm.cmd) se resuelve vía shell.
+        shell: IS_WINDOWS,
+        windowsHide: true,
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  if (wipe) {
+    console.log(`${COLORS[service.name]}[${service.name}]${RESET} Borrando node_modules para reinstalar desde cero…`);
+    removeDir(nodeModules);
+  }
+  if (run()) return true;
+
+  console.log(`${COLORS[service.name]}[${service.name}]${RESET} Falló npm install; reintentando desde cero…`);
+  removeDir(nodeModules);
+  if (run()) return true;
+
+  if (fs.existsSync(lockFile)) {
+    console.log(`${COLORS[service.name]}[${service.name}]${RESET} Borrando también package-lock.json (instalación de 0)…`);
+    try {
+      fs.rmSync(lockFile, { force: true });
+    } catch {}
+    removeDir(nodeModules);
+    if (run()) return true;
+  }
+  return false;
+}
+
 // Comprueba que el node_modules de un servicio esté completo y, si no, ejecuta
 // `npm install` en su directorio. Devuelve false si la instalación falla.
 function ensureNpmDeps(service) {
+  if (clean) {
+    console.log(`${COLORS[service.name]}[${service.name}]${RESET} --clean: reinstalando dependencias desde cero…`);
+    if (!npmInstall(service, { wipe: true })) {
+      error(service.name, 'Falló npm install desde cero. Revisa el error de arriba y reintenta.');
+      return false;
+    }
+    console.log(`${COLORS[service.name]}[${service.name}]${RESET} Dependencias instaladas (desde cero).`);
+    return true;
+  }
+
   const missing = missingNpmDeps(service);
   if (missing.length === 0) {
     console.log(`${COLORS[service.name]}[${service.name}]${RESET} Dependencias OK (node_modules completo).`);
@@ -613,9 +798,7 @@ function ensureNpmDeps(service) {
   console.log(
     `${COLORS[service.name]}[${service.name}]${RESET} Faltan dependencias (${missing.join(', ')}) — instalando…`,
   );
-  try {
-    execFileSync('npm', ['install'], { cwd: service.cwd, stdio: 'inherit' });
-  } catch {
+  if (!npmInstall(service)) {
     error(service.name, 'Falló npm install. Revisa el error de arriba y reintenta.');
     return false;
   }
@@ -623,24 +806,47 @@ function ensureNpmDeps(service) {
   return true;
 }
 
+// Comprobaciones previas: Node >= 20 y npm disponible.
+function preflight() {
+  const major = parseInt(process.versions.node.split('.')[0], 10);
+  if (major < 20) {
+    error('dev', `Node ${process.versions.node} no es compatible; se requiere Node >= 20 (chat-web/Vite 8 pide >= 20.19).`);
+    console.log(`${DIM}Descárgalo en https://nodejs.org/${RESET}`);
+    return false;
+  }
+  try {
+    execFileSync(NPM, ['--version'], { stdio: 'ignore', shell: IS_WINDOWS, windowsHide: true });
+  } catch {
+    error('dev', `No se encontró npm (${NPM}) en el PATH. Instala Node.js, que incluye npm: https://nodejs.org/`);
+    return false;
+  }
+  return true;
+}
+
 // ─── Principal ────────────────────────────────────────────────────────────
+
+// Detiene los servicios montados (pids registrados) y libera sus puertos.
+async function stopServices() {
+  console.log(`${BOLD}Deteniendo servicios…${RESET}`);
+  // Pids de procesos montados (servicios y el follower de logs de la DB).
+  if (fs.existsSync(PID_FILE)) {
+    for (const line of fs.readFileSync(PID_FILE, 'utf8').split('\n')) {
+      const m = line.trim().match(/^(\S+)\s+(\d+)$/);
+      if (!m) continue;
+      console.log(`${DIM}[${m[1]}]${RESET} PID ${m[2]} → ${IS_WINDOWS ? 'taskkill /T /F' : 'SIGTERM'}`);
+      safeKill(Number(m[2]), 'SIGTERM');
+    }
+    await sleep(800);
+    fs.rmSync(PID_FILE, { force: true });
+  }
+  // Respaldo: matar lo que siga escuchando en los puertos.
+  for (const s of services) await freePort(s.port, s.name);
+  console.log(`${GREEN}✔${RESET} Servicios detenidos.`);
+}
+
 async function main() {
   if (stop) {
-    console.log(`${BOLD}Deteniendo servicios…${RESET}`);
-    // Pids de procesos montados (servicios y el follower de logs de la DB).
-    if (fs.existsSync(PID_FILE)) {
-      for (const line of fs.readFileSync(PID_FILE, 'utf8').split('\n')) {
-        const m = line.trim().match(/^(\S+)\s+(\d+)$/);
-        if (!m) continue;
-        console.log(`${DIM}[${m[1]}]${RESET} PID ${m[2]} → SIGTERM`);
-        safeKill(Number(m[2]), 'SIGTERM');
-      }
-      await sleep(800);
-      fs.rmSync(PID_FILE, { force: true });
-    }
-    // Respaldo: matar lo que siga escuchando en los puertos.
-    for (const s of services) await freePort(s.port, s.name);
-    console.log(`${GREEN}✔${RESET} Servicios detenidos.`);
+    await stopServices();
     return;
   }
 
@@ -654,8 +860,16 @@ async function main() {
     return;
   }
 
+  // Preflight: Node >= 20 y npm disponibles.
+  if (!preflight()) process.exit(1);
+
+  // Con --clean hay que detener los servicios antes de borrar node_modules:
+  // en Windows esos archivos están bloqueados mientras el proceso sigue vivo.
+  if (clean) await stopServices();
+
   console.log(
-    `${BOLD}${GREEN}Montando servicios${RESET} ${DIM}(${reload ? 'hot-reload ON' : 'hot-reload OFF'})${RESET}\n`,
+    `${BOLD}${GREEN}${installOnly ? 'Preparando dependencias' : 'Montando servicios'}${RESET} ` +
+      `${DIM}(${reload ? 'hot-reload ON' : 'hot-reload OFF'})${RESET}\n`,
   );
 
   // ── knowledge-service: en Docker (--ks-docker) o con .venv local ──
@@ -670,8 +884,10 @@ async function main() {
   //   - Si no existe → crearlo e instalar requirements.txt.
   const ks = services[2];
   const venvDir = path.join(ks.cwd, '.venv');
-  const venvPython = path.join(venvDir, 'bin', 'python');
-  const venvPip = path.join(venvDir, 'bin', 'pip');
+  // En Windows los entornos virtuales viven en Scripts/ y con extensión .exe.
+  const venvBinDir = path.join(venvDir, IS_WINDOWS ? 'Scripts' : 'bin');
+  const venvPython = path.join(venvBinDir, IS_WINDOWS ? 'python.exe' : 'python');
+  const venvPip = path.join(venvBinDir, IS_WINDOWS ? 'pip.exe' : 'pip');
   const depsMarker = path.join(venvDir, '.deps-ok');
   const ksColor = COLORS['knowledge-service'];
 
@@ -684,8 +900,9 @@ async function main() {
     }
   }
 
-  // Instala requirements.txt usando un TMPDIR dentro del proyecto (evita
-  // particiones /tmp pequeñas) y escribe el marcador .deps-ok al terminar.
+  // Instala requirements.txt usando un directorio temporal dentro del proyecto
+  // (evita particiones /tmp pequeñas) y escribe el marcador .deps-ok al
+  // terminar. TMPDIR (Unix) y TEMP/TMP (Windows) apuntan ahí.
   function installDeps(label) {
     console.log(`${ksColor}[knowledge-service]${RESET} ${label}`);
     const pipTmp = path.join(ks.cwd, '.pip-tmp');
@@ -695,7 +912,7 @@ async function main() {
       execFileSync(venvPip, ['install', '-r', 'requirements.txt'], {
         cwd: ks.cwd,
         stdio: 'inherit',
-        env: { ...process.env, TMPDIR: pipTmp },
+        env: { ...process.env, TMPDIR: pipTmp, TEMP: pipTmp, TMP: pipTmp },
       });
       ok = true;
     } catch {
@@ -722,16 +939,24 @@ async function main() {
       console.log(`${ksColor}[knowledge-service]${RESET} No hay .venv — creándolo…`);
     }
 
+    const pythonBin = findPython();
     try {
-      execFileSync('python3', ['-m', 'venv', '.venv'], { cwd: ks.cwd, stdio: 'inherit' });
+      execFileSync(pythonBin, ['-m', 'venv', '.venv'], { cwd: ks.cwd, stdio: 'inherit' });
     } catch (err) {
       if (err.code === 'ENOENT') {
-        error('knowledge-service', 'python3 no está instalado o no está en el PATH.');
+        error(
+          'knowledge-service',
+          IS_WINDOWS
+            ? 'python no está instalado o no está en el PATH. Instálalo desde https://www.python.org/downloads/ marcando "Add python.exe to PATH".'
+            : 'python3 no está instalado o no está en el PATH.',
+        );
       } else {
         error(
           'knowledge-service',
-          'No se pudo crear .venv (¿falta el soporte de venv?). En Debian/Ubuntu:\n' +
-            '  sudo apt install python3.14-venv\n' +
+          'No se pudo crear .venv (¿falta el soporte de venv?).\n' +
+            (IS_WINDOWS
+              ? '  Reinstala Python marcando "Add python.exe to PATH"; el módulo venv viene incluido.'
+              : '  En Debian/Ubuntu:  sudo apt install python3-venv\n') +
             'y vuelve a ejecutar el script.',
         );
       }
@@ -763,10 +988,22 @@ async function main() {
     warn('backend', 'No hay .env en backend/ (se usan defaults; revisa backend/.env.example)');
   }
   if (!ksDocker && !commandExists('libreoffice') && !commandExists('soffice')) {
-    warn('knowledge-service', 'LibreOffice no está instalado: los formatos raros (.doc, .ppt, .pages, .epub…) no se extraerán. Instálalo con: sudo apt install libreoffice, o corre el knowledge-service en Docker con --ks-docker');
+    warn(
+      'knowledge-service',
+      'LibreOffice no está instalado: los formatos raros (.doc, .ppt, .pages, .epub…) no se extraerán. ' +
+        (IS_WINDOWS
+          ? 'Instálalo con: winget install TheDocumentFoundation.LibreOffice, o corre el knowledge-service en Docker con --ks-docker'
+          : 'Instálalo con: sudo apt install libreoffice, o corre el knowledge-service en Docker con --ks-docker'),
+    );
   }
   if (!fs.existsSync(path.join(ROOT, 'knowledge-service', '.env'))) {
     warn('knowledge-service', 'No hay .env en knowledge-service/ (revisa knowledge-service/.env.example)');
+  }
+
+  // Con --install solo se prepara el entorno (npm + .venv) y se termina.
+  if (installOnly) {
+    console.log(`\n${GREEN}✔${RESET} Dependencias listas (--install: no se montan los servicios).`);
+    return;
   }
 
   // ── Liberar puertos y montar ──

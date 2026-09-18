@@ -4,6 +4,9 @@
   "version": "1.0.0",
   "description": "Orquestador de desarrollo: levanta backend, chat-web y knowledge-service",
   "scripts": {
-    "dev": "node dev.js"
+    "dev": "node dev.js",
+    "dev:stop": "node dev.js --stop",
+    "dev:clean": "node dev.js --clean",
+    "setup": "node dev.js --install"
   }
 }
