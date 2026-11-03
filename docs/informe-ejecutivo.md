@@ -2,7 +2,7 @@
 
 **Corte:** 29-oct-2026 · **Moneda:** pesos colombianos a **3.200 COP por dólar** (el dólar observado está en 3.143; se usa 3.200 como margen) · **Fuente:** `analisis-costos.md` (bloques A, B y F)
 
-Este informe resume tres cosas: cuánto costó **desarrollar** la plataforma, cuánto cuesta **operar el bot de un cliente** (100 conversaciones al día, 5 GB) y a qué **precio de venta** se debería ofrecer ese bot.
+Este informe resume tres cosas: cuánto costó **desarrollar** la plataforma, cuánto cuesta **operar el bot de un cliente** (100 conversaciones al día, 5 GB) y a qué **precio de venta** se debería ofrecer ese bot. La infraestructura se calcula sobre un **VDS de Contabo** (8 vCPU / 32 GB / 240 GB NVMe) que cuesta **US$68 + IVA = US$80,92/mes** y sostiene **35 bots**.
 
 ---
 
@@ -35,20 +35,20 @@ No se usa tarifa de junior (COP $50.000/h), porque ese perfil no toma las decisi
 
 | Concepto | Cálculo | USD/mes | COP/mes |
 |---|---|---|---|
-| Infraestructura (5 GB) | 5 GB sobre un VPS de US$30/mes (8 vCPU / 32 GB / 250 GB NVMe) | US$0,62–0,72 | COP $1.980–2.300 |
+| Infraestructura (5 GB) | VDS de US$80,92/mes repartido entre 35 bots | US$2,31 | COP $7.398 |
 | WhatsApp: utilidades | 6.000 × US$0,0008 | US$4,80 | COP $15.360 |
 | WhatsApp: publicidad | 4 × US$0,0125 | US$0,05 | COP $160 |
 | IA (tokens) | 42,75 M tokens × US$0,15–0,30 / M | US$6,41–12,83 | COP $20.520–41.040 |
-| **Costo total del bot** | | **US$11,88–18,40** | **COP $38.020–58.860** |
+| **Costo total del bot** | | **US$13,57–19,99** | **COP $43.438–63.958** |
 
 **De dónde sale cada línea:**
 
-- **Infraestructura:** el VPS cuesta US$30 al mes y entrega 250 GB de disco. La cuota de 5 GB del bot vale 5 × (30 ÷ 250) = **US$0,60**, más dominio, certificado y respaldos repartidos (**US$0,02–0,12**). Es la única línea fija: no cambia con el volumen.
+- **Infraestructura:** el VDS cuesta US$68 + IVA (19%) = **US$80,92 al mes** y entrega 240 GB de disco. Descontando Debian 12, Docker, PostgreSQL y una reserva de 12%, quedan **199 GB para datos de clientes**: caben **35 bots de 5 GB**. Repartido, cada bot cuesta 80,92 ÷ 35 = **US$2,31**. Por dentro: US$1,69 de disco (5 GB × US$0,337) y US$0,62 de CPU, RAM, sistema y holgura. Es la única línea fija: no cambia con el volumen.
 - **Utilidades:** 2 plantillas por conversación × 3.000 conversaciones = **6.000 al mes**. Meta cobra US$0,0008 por plantilla entregada → **US$4,80**.
 - **Publicidad:** 4 envíos al mes, a US$0,0125 cada uno → **US$0,05**. No depende del volumen.
 - **IA:** cada conversación gasta **14.250 tokens** (5 respuestas: 13.500 de entrada + 750 de salida). 3.000 conversaciones → **42,75 millones de tokens**. DeepSeek cobra US$0,15 por millón fuera de hora pico y US$0,30 en hora pico → **US$6,41–12,83**.
 
-**Referencias rápidas:** por conversación, **COP $12,7–19,6**; por día (100 conversaciones), **COP $1.267–1.962**.
+**Referencias rápidas:** por conversación, **COP $14.479–21.319**; por día (100 conversaciones), **COP $1.448–2.132**.
 
 **Dos reglas que abaratan el cálculo:**
 1. **Recibir mensajes es gratis e ilimitado.** El cliente escribe primero; Meta no cobra por recibir ni por responder dentro de la ventana de 24 h.
@@ -62,11 +62,11 @@ Las utilidades y la IA crecen **en línea recta** con las conversaciones; la inf
 
 | Conversaciones/día | Conversaciones/mes | Tokens/mes | IA (COP) | Utilidades (COP) | **Costo total (COP)** |
 |---|---|---|---|---|---|
-| 100 | 3.000 | 42,75 M | $20.520–41.040 | $15.360 | **$38.020–58.860** |
-| 200 | 6.000 | 85,50 M | $41.040–82.080 | $30.720 | **$73.900–115.260** |
-| 400 | 12.000 | 171,00 M | $82.080–164.160 | $61.440 | **$145.660–228.060** |
+| 100 | 3.000 | 42,75 M | $20.520–41.040 | $15.360 | **$43.438–63.958** |
+| 200 | 6.000 | 85,50 M | $41.040–82.080 | $30.720 | **$79.318–120.358** |
+| 400 | 12.000 | 171,00 M | $82.080–164.160 | $61.440 | **$151.078–233.158** |
 
-La publicidad (COP $160) y la infraestructura (COP $1.980–2.300) ya están sumadas en cada columna. Pasar de 100 a 200 conversaciones diarias **duplica el costo variable**; la infraestructura no se mueve porque el chat es texto.
+La publicidad (COP $160) y la infraestructura (COP $7.398) ya están sumadas en cada columna. Pasar de 100 a 200 conversaciones diarias **duplica el costo variable**; la infraestructura no se mueve porque el chat es texto. Un VDS sostiene 35 bots; para 100 bots hacen falta **tres VDS** (105 puestos), o sea COP $776.832/mes de servidores.
 
 ---
 
@@ -74,13 +74,15 @@ La publicidad (COP $160) y la infraestructura (COP $1.980–2.300) ya están sum
 
 | Concepto | Valor |
 |---|---|
-| **Costo directo del bot** | **COP $38.020–58.860/mes** |
+| **Costo directo del bot** | **COP $43.438–63.958/mes** |
 | **Precio sugerido de venta** | **COP $169.000/mes** |
-| Margen sobre el costo | 65–78% |
-| Precio mínimo (cubrir el peor caso) | COP $59.000 |
-| Rango para 70% de margen | COP $126.700–196.200 |
+| Margen sobre el costo | 62–74% |
+| Precio mínimo (cubrir el peor caso) | COP $64.000 |
+| Rango para 70% de margen | COP $144.800–213.200 |
 
-**Recomendación:** vender el bot de 100 conversaciones al día a **COP $169.000/mes** (el plan Activo de `analisis-costos.md`, F.4). Cubre el peor caso del costo con holgura (65–78% de margen) y deja espacio para soporte y acompañamiento de entrada. Si se quiere fijar el precio contra un margen exacto del 70%, el rango sería **COP $126.700–196.200**.
+**Recomendación:** vender el bot de 100 conversaciones al día a **COP $169.000/mes** (el plan Activo de `analisis-costos.md`, F.4). Cubre el peor caso del costo con holgura (62–74% de margen) y deja espacio para soporte y acompañamiento de entrada. Si se quiere fijar el precio contra un margen exacto del 70%, el rango sería **COP $144.800–213.200**.
+
+**Aparte del plan:** el respaldo se cobra a **COP $2.000 por GB al mes** (mínimo 1 GB), medido sobre lo que el cliente ocupa. Un cliente de 3 GB paga COP $6.000; el costo real es US$0,02.
 
 El desarrollo (COP $16,56M) **no entra en este precio mensual**: es una inversión ya incurrida que se recupera con el volumen de clientes, no con la tarifa de un solo bot.
 
@@ -103,4 +105,4 @@ Precios de referencia de bots hechos **específicamente para WhatsApp** y orient
 - **Más simple que WATI o Zoko:** no cobra por número de WhatsApp ni por asiento; es un precio plano por bot con la IA incluida.
 - **Mucho más barato que los agentes IA empresariales (Yellow.ai, Gupshup ACE):** COP $169.000 contra tarifas de US$500+/mes.
 
-**La ventaja de precio se sostiene en el modelo de costo:** este bot cobra un fijo mensual y su costo por conversación es COP $12,7–19,6, sin cobrar por contacto, número ni resolución. Por eso queda entre los automatizadores por reglas y los agentes IA por uso, con IA real incluida en un precio plano.
+**La ventaja de precio se sostiene en el modelo de costo:** este bot cobra un fijo mensual y su costo por conversación es COP $14.479–21.319, sin cobrar por contacto, número ni resolución. Por eso queda entre los automatizadores por reglas y los agentes IA por uso, con IA real incluida en un precio plano.

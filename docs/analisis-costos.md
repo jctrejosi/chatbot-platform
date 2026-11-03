@@ -3,7 +3,7 @@
 **Fecha de corte:** 29-oct-2026. Último commit de la segunda versión (comercial): 23-oct-2026.
 **Moneda:** COP, con equivalencia a USD a **3.200 COP/USD** (dólar observado 3.143; se usa 3.200 como margen de seguridad).
 **Alcance:** costo **incurrido hasta hoy**: horas de la primera versión del desarrollo (investigación) y de la segunda versión (comercial), más costos de operación y comerciales. No incluye trabajo futuro ni proyecciones.
-**Fuentes:** precios DeepSeek y Meta WhatsApp Business (oct-2026); infraestructura: VPS propio de US$30/mes que contratamos y administramos.
+**Fuentes:** precios DeepSeek y Meta WhatsApp Business (oct-2026); infraestructura: **VDS de Contabo** (8 vCPU / 32 GB / 240 GB NVMe) a **US$68 + IVA = US$80,92/mes**, que contratamos y administramos.
 
 ---
 
@@ -38,9 +38,11 @@ Dentro de **B** van aparte: **B.1 WhatsApp**, **B.2 LLM**, **B.3 Infraestructura
 | Bloque | Concepto | Valor |
 |---|---|---|
 | **A** | **Desarrollo hasta hoy** (investigación + producto) | **COP $16,56M** (US$5.176) por 130 h |
-| **B** | **1 bot a 100 conversaciones/día**, WhatsApp e IA incluidos | **US$11,88–18,40/mes** (COP $38.020–58.860) |
-| **B** | El mismo bot a 70 conversaciones/día | **US$8,52–13,11/mes** |
-| **B** | El mismo bot a 20 conversaciones/día | **US$2,91–4,30/mes** |
+| **B** | **1 bot a 100 conversaciones/día**, WhatsApp, IA e infraestructura incluidos | **US$13,57–19,99/mes** (COP $43.438–63.958) |
+| **B** | El mismo bot a 70 conversaciones/día | **US$10,21–14,70/mes** (COP $32.674–47.038) |
+| **B** | El mismo bot a 20 conversaciones/día | **US$4,60–5,89/mes** (COP $14.734–18.838) |
+| **B** | Infraestructura de 1 bot | **US$2,31/mes** (COP $7.398) |
+| **B** | Bots de 100 conversaciones que caben en un VDS | **35** |
 | **C** | Comercial de entrada (pago único) | **COP $6M–27,8M** |
 | **C** | Comercial recurrente | **COP $2,6M–18,2M/mes** + comisiones + pasarela |
 | **F** | Factura al cliente, bot típico | **COP $129.000/mes** (US$40,31) |
@@ -48,8 +50,8 @@ Dentro de **B** van aparte: **B.1 WhatsApp**, **B.2 LLM**, **B.3 Infraestructura
 **Tres conclusiones:**
 
 1. **El desarrollo hasta hoy costó COP $16,56M:** 130 h valoradas a COP $127.400/h, de las cuales 56 son de la primera versión del desarrollo (investigación) y 74 de la segunda versión (comercial).
-2. **Recibir mensajes es gratis e ilimitado; lo que se paga es lo que el bot envía fuera de la ventana.** El cliente escribe primero, así que las respuestas del bot no cuestan. Se paga la **utilidad** (2 plantillas por conversación, a US$0,0008) y la **publicidad** (4 envíos al mes, a US$0,0125). A 100 conversaciones diarias eso son US$4,80 de utilidad + US$0,05 de publicidad. La **IA** (US$6,41–12,83) es la partida dominante: entre el 54% y el 70% del costo.
-3. **El costo escala con las conversaciones, no con los clientes.** Es lineal en utilidad y en IA: US$2,91–4,30/mes a 20 conversaciones diarias, US$8,52–13,11 a 70 y US$11,88–18,40 a 100. La infraestructura (US$0,62–0,72) y la publicidad (US$0,05) son fijas. **COP $129.000/mes** cubre el bot típico con margen amplio; el detalle está en F.
+2. **Recibir mensajes es gratis e ilimitado; lo que se paga es lo que el bot envía fuera de la ventana.** El cliente escribe primero, así que las respuestas del bot no cuestan. Se paga la **utilidad** (2 plantillas por conversación, a US$0,0008) y la **publicidad** (4 envíos al mes, a US$0,0125). A 100 conversaciones diarias eso son US$4,80 de utilidad + US$0,05 de publicidad. La **IA** (US$6,41–12,83) es la partida dominante: entre el **47% y el 64%** del costo.
+3. **El costo escala con las conversaciones, no con los clientes.** Es lineal en utilidad y en IA: US$4,60–5,89/mes a 20 conversaciones diarias, US$10,21–14,70 a 70 y US$13,57–19,99 a 100. La infraestructura (US$2,31) y la publicidad (US$0,05) son fijas. Un VDS de US$80,92 sostiene **35 bots**; para crecer se agrega otro VDS igual. **COP $129.000/mes** cubre el bot típico con margen; el detalle está en F.
 
 ---
 
@@ -66,8 +68,9 @@ Dentro de **B** van aparte: **B.1 WhatsApp**, **B.2 LLM**, **B.3 Infraestructura
 | **Utilidad** | **2 plantillas por conversación** | 70/día → 4.200 al mes; 100/día → 6.000 al mes |
 | **Publicidad** | **4 envíos al mes** | Fija, no depende del volumen |
 | **Utilidad dentro de la ventana de 24 h** | **US$0** | Meta no cobra la plantilla de utilidad con ventana de servicio abierta; aquí se calcula como techo (cobradas) para no subestimar |
-| **Almacenamiento inicial por bot** | **5 GB** | Cuota asignada en el VPS (B.6.2) |
-| **Infraestructura** | **VPS propio de US$30/mes** (8 vCPU / 32 GB / 250 GB NVMe) | Lo contratamos y lo administramos nosotros |
+| **Almacenamiento inicial por bot** | **5 GB** | Cuota asignada en el VDS (B.6.2) |
+| **Infraestructura** | **VDS de Contabo: 8 vCPU, 32 GB, 240 GB NVMe · US$68 + IVA = US$80,92/mes** | Lo contratamos y lo administramos nosotros (B.3) |
+| **Bots por servidor** | **35** | Tope realista con la cuota de 5 GB y el sistema instalado (B.3.2) |
 | **Modelo de WhatsApp** | **Cuenta de empresa, un número por cliente** | La plataforma paga el consumo a Meta; el cliente no abre cuenta |
 | Ventana de 24 h | Respuestas dentro de la ventana: **gratis** | El cliente casi siempre escribe primero |
 | Tipo de cambio | **3.200 COP/USD** | Dólar observado 3.143; se usa 3.200 como margen |
@@ -325,7 +328,7 @@ Un bot que atiende 100 personas en un día consume alrededor de **1,43 millones 
 | Costo del mes | tarifa por token sobre esos 42,75M tokens | **US$6,41–12,83** |
 | Costo de IA por 1.000 conversaciones | 14,25M tokens | US$2,14–4,28 |
 
-Por bot, la IA cuesta **US$6,41–12,83 al mes**: es la partida dominante del costo directo (54–70% del total), porque WhatsApp solo cobra utilidad y publicidad, no las respuestas.
+Por bot, la IA cuesta **US$6,41–12,83 al mes**: es la partida dominante del costo directo (**47–64%** del total), porque WhatsApp solo cobra utilidad y publicidad, no las respuestas.
 
 **Palancas:** `max_tokens` explícito, historial más corto, menos fragmentos por consulta y caché del prefijo (las instrucciones fijas del sistema no cambian, así que se cobran más baratas). Cada palanca mueve el costo por conversación, y por eso se mide en esa unidad.
 
@@ -351,76 +354,114 @@ Aplicada a 140 conversaciones al día (fuera de la tabla): 4.200 conversaciones,
 
 **Qué mueve el precio:** con 5 respuestas por conversación, la mayoría de los tokens son de entrada (historial + fragmentos de la base de conocimiento). Un bot que responda con menos contexto baja el costo sin tocar el precio de lista; uno que suba a 8 respuestas por conversación lo sube un 60% sin mover el volumen.
 
-## B.3 Infraestructura (VPS propio)
+## B.3 Infraestructura (VDS propio)
 
-No usamos plataformas gestionadas para el producto. Todo corre en un **VPS que contratamos y administramos nosotros**: 8 vCPU, 32 GB de RAM, 250 GB NVMe, **US$30/mes**. El costo no es por servicio ni por asiento: es por máquina. Cada bot ocupa una cuota de 5 GB y el resto del servidor es holgura que administramos nosotros.
+No usamos plataformas gestionadas para el producto. Todo corre en un **VDS de Contabo** que contratamos y administramos nosotros: 8 núcleos AMD EPYC 7282, 32 GB de RAM, 240 GB NVMe y puerto de 500 Mbit/s, sobre Debian 12. El costo es por máquina, no por servicio ni por asiento. Cada bot ocupa una cuota de 5 GB y el resto del servidor es holgura que administramos nosotros.
 
-### B.3.1 Qué entrega el VPS de US$30
+### B.3.1 Qué entrega el VDS de US$68 + IVA
 
 | Recurso | Capacidad | Para qué |
 |---|---|---|
-| 8 vCPU | 8 núcleos | interfaz de programación, procesos en segundo plano, carga de documentos, base de datos |
-| 32 GB RAM | 32 GB | base de datos, modelo de vectores (~1 GB), Node |
-| 250 GB NVMe | 250 GB | documentos, vectores, historial, registros |
-| IPv4 + tráfico | — | mensajes de Meta e interfaz de programación |
-| SSL | — | Let's Encrypt |
+| CPU | 8 núcleos virtuales AMD EPYC 7282 a 2,8 GHz | interfaz de programación, procesos en segundo plano, carga de documentos, base de datos |
+| RAM | 32 GB | base de datos, modelo de vectores, Node |
+| Disco | 240 GB NVMe | sistema operativo, contenedores, documentos, vectores, historial |
+| Red | puerto de 500 Mbit/s | mensajes de Meta e interfaz de programación |
+| Sistema operativo | Debian 12 | base del servidor |
 
-Este es el **servidor base**. No se vende por cliente ni se dedica a nadie: se llena y, cuando se llena, se agrega otro igual. **El escalado es nuestro**, no una decisión ni un costo que se le traslade al cliente.
+| Concepto | Valor |
+|---|---|
+| Precio de lista | US$68,00/mes |
+| IVA (19%) | US$12,92/mes |
+| **Costo mensual** | **US$80,92** (COP $258.944) |
 
-### B.3.2 Qué consume un cliente
+**Sobre el IVA:** si la empresa es responsable de IVA, esos US$12,92 se descuentan y el costo neto vuelve a US$68. Aquí se cuenta completo para no subestimar. Todos los cálculos siguientes usan **US$80,92**.
 
-Base del cálculo: **1 cliente, 1 bot, 100 conversaciones al día, 5 GB**.
+### B.3.2 Capacidad real: cuántos bots caben
 
-| Recurso | Consumo de 1 cliente | Cómo sale | Peso en el servidor |
-|---|---|---|---|
-| Disco | **5 GB** | cuota del plan (B.6.2) | 2% de 250 GB |
-| CPU | ~0,1 vCPU promedio | 500 mensajes/día = 0,35 mensajes/minuto; el pico es la carga de PDFs | 1–2% de 8 vCPU |
-| RAM | ~0,3 GB | conexiones y buffers; el modelo de vectores (~1 GB) es compartido | ~1% de 32 GB |
-| Red | <100 MB/mes | mensajes entrantes y respuestas | incluido |
-| IPv4 + SSL | incluido | — | US$0 |
+Los 240 GB no son para los clientes: el sistema operativo, los contenedores y la base de datos consumen una parte antes de que entre el primer bot.
 
-**El recurso escaso es el disco.** Por eso la cuota y el costo se miden en GB y no en mensajes: un cliente de 10 conversaciones al día ocupa el mismo espacio que uno de 100, y el que sube de plan compra espacio, no capacidad de la máquina.
+| Concepto | Espacio |
+|---|---|
+| Disco nominal (Contabo) | 240 GB |
+| Equivalente que reporta el sistema (240 ÷ 1,0737) | 223,5 GB |
+| Reserva del sistema de archivos (5%) | −11,2 GB |
+| Swap (archivo de intercambio) | −4,0 GB |
+| Debian 12 + utilidades | −1,8 GB |
+| Docker + imágenes (api, base de datos, panel) | −2,0 GB |
+| Caché de compilación | −2,0 GB |
+| PostgreSQL (clúster base + registro de transacciones) | −1,5 GB |
+| Caché del modelo de vectores | −0,2 GB |
+| Registros, temporales y actualizaciones | −1,8 GB |
+| **Disponible para datos de clientes** | **~199 GB** |
 
-**Si un cliente crece:** con 1.000 conversaciones diarias el historial suma ~150 MB/mes (150.000 mensajes), o sea **3,6 GB en los 24 meses de retención**. Sigue cabiendo en la cuota, y si no, se amplía de 10 en 10 GB. Lo que se dispara con ese volumen es WhatsApp y la IA (B.1 y B.2), no el servidor.
+Con esos 199 GB, el número de bots depende de cuánto ocupe cada uno:
+
+| Ocupación promedio por bot | Bots en 199 GB | Bots con 12% de reserva (175 GB) |
+|---|---|---|
+| 5,0 GB (cuota llena) | 39 | **35** |
+| 3,5 GB (con documentos) | 56 | 50 |
+| 2,0 GB (chat y pocos documentos) | 99 | 87 |
+
+**El número de planeación es 35 bots.** Deja 24 GB libres (12%) para que la base de datos compacte, el registro de transacciones crezca y las actualizaciones del sistema no se queden sin espacio.
+
+**Por qué no 50:** 50 bots × 5 GB = 250 GB, más de lo que tiene el disco antes de instalar Debian. Solo cabrían si nadie llena su cuota, y entonces la cuota de 5 GB sería un adorno. Con 35 bots la promesa se cumple.
+
+**Qué consume un bot:**
+
+| Recurso | Consumo | Peso en el servidor |
+|---|---|---|
+| Disco | **5 GB** | 2,5% de 199 GB |
+| CPU | ~0,05 vCPU promedio | menos de 1% de 8 núcleos |
+| RAM | ~0,2 GB | menos de 1% de 32 GB |
+| Red | <100 MB/mes | incluido |
+
+**La CPU y la RAM no son el límite.** 35 bots × 100 conversaciones al día son 3.500 conversaciones y 17.500 mensajes del bot al día: 0,2 mensajes por segundo en promedio. PostgreSQL usa ~4 GB, los tres procesos de Node ~1 GB y el modelo de vectores ~0,3 GB: unos 6 GB de 32. **El recurso escaso es el disco**, y por eso la cuota se mide en GB y no en mensajes.
+
+**Si un bot crece:** 1.000 conversaciones diarias generan ~150 MB de historial al mes (150.000 mensajes), o **3,6 GB en los 24 meses de retención**. Sigue cabiendo en la cuota; lo que se dispara con ese volumen es WhatsApp y la IA (B.1 y B.2), no el servidor.
 
 ### B.3.3 Cuánto cuesta la infraestructura de un cliente
 
+El VDS cuesta US$80,92 y sostiene 35 bots. Ese es el costo de la infraestructura de un bot:
+
 | Componente | Cálculo | Costo/mes |
 |---|---|---|
-| Disco del cliente | 5 GB × (US$30 ÷ 250 GB) = 5 × US$0,12 | **US$0,60** |
-| CPU, RAM y red | ya pagados en el VPS; el cliente usa holgura | US$0 |
-| Dominio + SSL | US$1 ÷ bots del servidor | US$0,02 |
-| Backups | US$0–5 ÷ bots del servidor | US$0–0,10 |
-| **Infraestructura de 1 cliente** | | **US$0,62–0,72** |
+| Servidor repartido entre los bots que caben | US$80,92 ÷ 35 | **US$2,31** |
+| *Descompuesto:* | | |
+| Parte fija (CPU, RAM, sistema, dominio, holgura) | US$2,31 − (5 × US$0,337) | US$0,62 |
+| Disco | 5 GB × (US$80,92 ÷ 240 GB) = 5 × US$0,337 | US$1,69 |
+| **Infraestructura de 1 bot** | | **US$2,31** |
 
-**Por qué se asigna por disco y no por CPU:** de los tres recursos, el que se acaba primero es el disco. Un cliente que ocupa 2% del disco ocupa 1–2% de la CPU y 1% de la RAM. Asignar el costo por GB es lo que refleja el recurso escaso.
+**El costo por GB es US$0,337/mes (COP $1.079).** Es casi el triple del servidor anterior (US$0,12/GB), porque el VDS de Contabo tiene menos disco por dólar. Eso sube la infraestructura de un bot de US$0,62–0,72 a US$2,31, pero sigue siendo la partida menor frente a la IA (US$6,41–12,83).
 
-**Por qué el costo del bot es US$0,62–0,72 y no el del servidor completo:** los US$30 son un gasto fijo de la operación, no un costo por bot. Un bot ocupa 5 GB de 250 y eso es lo que cuesta atenderlo. El dimensionamiento de la máquina —cuántos bots caben, cuándo se amplía— es asunto nuestro y no aparece en la factura del cliente.
+**Cómo se aplica:** todo bot paga **US$0,62 de parte fija** más **US$0,337 por GB** ocupado. Con 5 GB son US$2,31; con 10 GB, US$4,00; con 25 GB, US$9,06.
+
+**Por qué se reparte el servidor y no solo el disco:** si solo se cobrara el disco, el bot de 5 GB costaría US$1,69 y los otros US$0,62 (sistema, base de datos, CPU, holgura) no aparecerían en ningún lado. Repartir el servidor completo entre los bots que caben es lo que refleja el costo real de atenderlos.
 
 ### B.3.4 Cómo escala el servidor
 
 | Situación | Qué hacemos | Efecto en el costo por bot |
 |---|---|---|
-| El servidor tiene holgura | Nada | US$0,62–0,72 |
-| Se llena el disco | Se contrata otro VPS idéntico | US$0,62–0,72 |
-| Un bot crece en almacenamiento | Bloques de 10 GB | +US$1,20 por bloque |
+| El servidor tiene menos de 35 bots | Nada | US$2,31 |
+| Se llega a 35 bots | Se contrata otro VDS idéntico | US$2,31 |
+| Un bot crece en almacenamiento | Bloques de 10 GB | +US$3,37 a costo |
 | Un bot crece en mensajes | Nada: el chat es texto | Sin cambio |
 
-**El costo por bot no depende de cuántos haya.** Cuando la máquina se llena se contrata otro VPS idéntico y la cuota de cada bot sigue costando lo mismo. Cuántos bots caben en una máquina y cuándo se amplía es información nuestra: el cliente ve su espacio, no la infraestructura.
+**El costo por bot no depende de cuántos haya.** Cuando la máquina se llena se contrata otro VDS idéntico y la cuota de cada bot sigue costando lo mismo. Cuántos bots caben y cuándo se amplía es información nuestra: el cliente ve su espacio, no la infraestructura.
+
+**El crecimiento es por escalones de 35 bots.** No hay punto medio: el VDS se paga completo aunque tenga 3 bots. Con 3 clientes la infraestructura cuesta US$26,97 por bot; con 35, US$2,31. La rentabilidad llega con la ocupación.
 
 ### B.3.5 Comparación con proveedores gestionados
 
-| Opción | Costo/mes | Qué cubre |
-|---|---|---|
-| Render Standard (2 GB) | US$25 | Un servicio; base de datos aparte |
-| Render + Postgres Basic | US$31–32 | ~2 GB de RAM en total |
-| Supabase Pro | US$25 | 8 GB de base; cómputo para procesos en segundo plano aparte |
-| **VPS propio 8/32/250** | **US$30** | **interfaz de programación + procesos en segundo plano + base de datos + carga de documentos + nginx** |
-| Equivalente gestionado (AWS/GCP/Azure) | US$150–300 (estimado) | Cómputo + base gestionada, sin operar servidor |
+| Opción | Costo/mes | Disco | Qué cubre |
+|---|---|---|---|
+| Render Standard (2 GB) | US$25 | — | Un servicio; base de datos aparte |
+| Supabase Pro | US$25 | 8 GB | Base de datos; cómputo para procesos en segundo plano aparte |
+| **VDS Contabo 8/32/240** | **US$80,92** | **240 GB** | **interfaz de programación + procesos en segundo plano + base de datos + carga de documentos + nginx** |
+| Equivalente gestionado (AWS/GCP/Azure) | US$150–300 (estimado) | — | Cómputo + base gestionada, sin operar servidor |
 
-Por el mismo dinero que un servicio gestionado de 2 GB, el VPS entrega 32 GB y 8 vCPU. **El ahorro se paga en tiempo**: parches, backups, monitoreo y disponibilidad son nuestros. Ese costo no es caja y por eso no está en B; se cubre con el soporte de C.2.
+Por menos de la mitad de un equivalente gestionado, el VDS entrega 32 GB de RAM y 240 GB de disco. **El ahorro se paga en tiempo**: parches, respaldos, monitoreo y disponibilidad son nuestros. Ese costo no es caja y por eso no está en B; se cubre con el soporte de C.2.
 
-**Costo oculto de la plataforma:** el proceso de carga de documentos mantiene el modelo de vectores en RAM y procesa en serie. Un PDF de 300 páginas puede tardar minutos y frenar la cola. En un VPS propio eso se paga en **CPU y latencia**, no en factura.
+**Costo oculto de la plataforma:** el proceso de carga de documentos mantiene el modelo de vectores en RAM y procesa en serie. Un PDF de 300 páginas puede tardar minutos y frenar la cola. En un VDS propio eso se paga en **CPU y latencia**, no en factura.
 
 ## B.4 Totales operativos según el volumen
 
@@ -434,18 +475,18 @@ Un bot, un mes. El consumo de WhatsApp y de IA crece con las conversaciones; la 
 | WhatsApp: utilidad (2 por conversación) | US$0,96 | US$1,92 | US$2,88 | US$3,84 | US$4,80 |
 | WhatsApp: publicidad | US$0,05 | US$0,05 | US$0,05 | US$0,05 | US$0,05 |
 | IA | US$1,28–2,57 | US$2,57–5,13 | US$3,85–7,70 | US$5,13–10,26 | US$6,41–12,83 |
-| Infraestructura | US$0,62–0,72 | US$0,62–0,72 | US$0,62–0,72 | US$0,62–0,72 | US$0,62–0,72 |
-| **Total/mes** | **US$2,91–4,30** | **US$5,16–7,82** | **US$7,40–11,35** | **US$9,64–14,87** | **US$11,88–18,40** |
+| Infraestructura | US$2,31 | US$2,31 | US$2,31 | US$2,31 | US$2,31 |
+| **Total/mes** | **US$4,60–5,89** | **US$6,85–9,41** | **US$9,09–12,94** | **US$11,33–16,46** | **US$13,57–19,99** |
 
 **Cómo se lee:** la utilidad acompaña a la conversación (2 por conversación, a US$0,0008), la publicidad son 4 envíos fijos al mes (US$0,05) y la infraestructura es una cuota fija de 5 GB. Duplicar conversaciones duplica la IA y la utilidad, no la máquina. La columna de tokens y la de IA son las mismas de **B.2.5**.
 
-**Dónde cae el caso base:** 100 conversaciones al día es la última columna, y da **US$11,88–18,40** (B.5).
+**Dónde cae el caso base:** 100 conversaciones al día es la última columna, y da **US$13,57–19,99** (B.5).
 
-**Qué manda en el total:** la IA, que es la partida dominante en todo el rango (54–70% del total). WhatsApp aporta entre US$1,01 y US$4,85 (utilidad + publicidad) y la infraestructura nunca pasa de US$0,72.
+**Qué manda en el total:** la IA, que es la partida dominante en todo el rango (**47–64%** del total). WhatsApp aporta entre US$1,01 y US$4,85 (utilidad + publicidad) y la infraestructura se queda fija en US$2,31.
 
 ## B.5 Costo de un bot, paso a paso (1 bot = 1 cliente)
 
-**El caso base:** un cliente, un bot, 100 conversaciones al día, 5 GB de almacenamiento, sobre nuestro VPS de US$30.
+**El caso base:** un cliente, un bot, 100 conversaciones al día, 5 GB de almacenamiento, sobre nuestro VDS de US$80,92.
 
 ### B.5.1 Cálculo mensual
 
@@ -457,8 +498,8 @@ Un bot, un mes. El consumo de WhatsApp y de IA crece con las conversaciones; la 
 | 4. Plantillas que inicia el negocio | 6.000 utilidad + 4 publicidad | 6.004 |
 | 5. WhatsApp | 6.000 × US$0,0008 + 4 × US$0,0125 | **US$4,85** |
 | 6. IA | 42,75M tokens × US$0,15–0,30 / M | **US$6,41–12,83** |
-| 7. Infraestructura | cuota de 5 GB del bot (B.3.3) | US$0,62–0,72 |
-| **Costo del bot** | 5 + 6 + 7 | **US$11,88–18,40** |
+| 7. Infraestructura | cuota de 5 GB del bot (B.3.3) | US$2,31 |
+| **Costo del bot** | 5 + 6 + 7 | **US$13,57–19,99** |
 
 Los totales se calculan con las cifras sin redondear; por eso sumar las partidas ya redondeadas puede dar unos centavos de diferencia.
 
@@ -472,33 +513,33 @@ Los totales se calculan con las cifras sin redondear; por eso sumar las partidas
 | Utilidad | 200 × US$0,0008 | US$0,16 |
 | Publicidad | 4 ÷ 30 ≈ 0,13 × US$0,0125 | ≈ US$0,002 |
 | IA | 1,43M tokens × US$0,15–0,30 / M | US$0,21–0,43 |
-| Infraestructura | US$0,62–0,72 ÷ 30 | US$0,02 |
-| **Costo por día** | | **US$0,40–0,61** |
+| Infraestructura | US$2,31 ÷ 30 | US$0,08 |
+| **Costo por día** | | **US$0,45–0,67** |
 
-Por día, el bot cuesta entre **40 y 61 centavos de dólar**. Treinta días de eso dan las cifras de B.5.1.
+Por día, el bot cuesta entre **45 y 67 centavos de dólar**. Treinta días de eso dan las cifras de B.5.1.
 
 ### B.5.3 Qué cambia si el bot atiende más o menos
 
-El costo variable es lineal en conversaciones: cada una suma **US$0,0037–0,0059** (IA + utilidad), mientras que la infraestructura (US$0,62–0,72) y la publicidad (US$0,05) son fijas. La escala completa está en **B.4**: de **US$2,91–4,30** con 20 conversaciones al día a **US$11,88–18,40** con 100.
+El costo variable es lineal en conversaciones: cada una suma **US$0,0037–0,0059** (IA + utilidad), mientras que la infraestructura (US$2,31) y la publicidad (US$0,05) son fijas. La escala completa está en **B.4**: de **US$4,60–5,89** con 20 conversaciones al día a **US$13,57–19,99** con 100.
 
 ## B.6 Infraestructura de un cliente: cuánto cobrar
 
-La base es la de B.3.3: **un bot ocupa 5 GB y cuesta US$0,62–0,72/mes**. Eso es lo que se factura; el resto de la máquina no entra en la factura del cliente.
+La base es la de B.3.3: **un bot ocupa 5 GB y cuesta US$2,31/mes**. Eso es lo que se factura; el resto de la máquina no entra en la factura del cliente.
 
 ### B.6.1 Precio de la infraestructura de un cliente
 
 | Concepto | Costo/mes | Precio sugerido | Margen |
 |---|---|---|---|
-| **Infraestructura + 5 GB** | US$0,62–0,72 | **COP $20.000** (US$6,25) | 88–90% |
-| Bloque adicional de 10 GB | US$1,20 | COP $40.000 (US$12,50) | 90% |
-| 25 GB (base + 2 bloques) | US$3,02–3,12 | COP $100.000 (US$31,25) | 90% |
-| 100 GB | US$12,02–12,12 | COP $400.000 (US$125,00) | 90% |
+| **Infraestructura + 5 GB** | US$2,31 | **COP $20.000** (US$6,25) | 63% |
+| Bloque adicional de 10 GB | US$3,37 | COP $40.000 (US$12,50) | 73% |
+| 25 GB (base + 2 bloques) | US$9,06 | COP $100.000 (US$31,25) | 71% |
+| 100 GB | US$34,34 | COP $400.000 (US$125,00) | 73% |
 
-**Qué cubre COP $20.000:** la cuota de 5 GB y su respaldo, con 86–88% de margen. El cliente paga espacio, no capacidad del servidor: cuántos bots caben en la máquina y cuándo se amplía es asunto nuestro (B.3.4).
+**Qué cubre COP $20.000:** la cuota de 5 GB, con 63% de margen. El cliente paga espacio, no capacidad del servidor: cuántos bots caben en la máquina y cuándo se amplía es asunto nuestro (B.3.4).
 
-**Cómo se forma el costo:** cada GB de disco cuesta **US$0,12/mes** (US$30 ÷ 250 GB). El bloque de 10 GB cuesta US$1,20 y se cobra COP $40.000 (US$12,50); el margen se mantiene en ~90% a cualquier tamaño, porque el precio sigue la misma tarifa por GB.
+**Cómo se forma el costo:** cada GB de disco cuesta **US$0,337/mes** (US$80,92 ÷ 240 GB) y cada bot paga **US$0,62** de parte fija. El bloque de 10 GB cuesta US$3,37 y se cobra COP $40.000 (US$12,50).
 
-**El precio no depende del volumen de conversaciones.** Un cliente de 70 conversaciones al día consume los mismos 5 GB que uno de 10: el chat es texto. Si el volumen crece mucho, compra bloques de 10 GB; si el servidor se llena, agregamos otro VPS. Por eso la infraestructura se cobra por almacenamiento y no por mensaje.
+**El precio no depende del volumen de conversaciones.** Un cliente de 70 conversaciones al día consume los mismos 5 GB que uno de 10: el chat es texto. Si el volumen crece mucho, compra bloques de 10 GB; si el servidor se llena, agregamos otro VDS. Por eso la infraestructura se cobra por almacenamiento y no por mensaje.
 
 **Peso en la factura:** COP $20.000 son el **15,5%** del plan de COP $129.000. El resto es plataforma, IA, WhatsApp y margen; la infraestructura no es lo que encarece el producto.
 
@@ -518,9 +559,52 @@ La cuota es **por bot**: un cliente con 3 bots tiene 15 GB. Los 5 GB se reparten
 - Al 80% se avisa al cliente. Al 100% no se corta el servicio: se amplía un bloque de 10 GB y se ajusta la factura.
 - El cliente nunca se queda sin poder cargar un documento; lo que cambia es el precio del bloque adicional.
 - Retención por defecto: chats 24 meses, registros 90 días. Lo que sale por retención libera cuota.
-- El backup diario es del VPS completo, no de cada bot: **no consume la cuota** del cliente.
+- El respaldo va aparte y se cobra por GB (B.6.3): **no consume la cuota** del cliente.
 
 **Por qué 5 GB alcanza:** a 100 conversaciones al día se generan **15.000 mensajes al mes**, unos 15 MB de texto. Los 0,3 GB del historial cubren los 24 meses de retención con holgura. El consumo real son los documentos de la base de conocimiento: 200–300 PDFs caben sin problema; contratos escaneados de 100 MB obligan a comprar bloques desde el inicio.
+
+### B.6.3 Respaldos: cuánto cobrar por GB
+
+El respaldo es un servicio **opcional** que se factura aparte, midiendo lo que el cliente ocupa.
+
+**Dónde se guarda: fuera del VDS.** Un respaldo en el mismo disco no protege de la falla del disco ni del servidor. Se usa almacenamiento de objetos externo (Backblaze B2, Cloudflare R2 o un segundo VDS pequeño).
+
+| Dónde se guarda | Costo real por GB/mes |
+|---|---|
+| Almacenamiento de objetos externo (B2) | US$0,006 (COP $19) |
+| Almacenamiento de objetos externo (R2) | US$0,015 (COP $48) |
+| En el VDS (240 GB) | US$0,337 (COP $1.079) |
+
+**Precio: COP $2.000 por GB al mes**, mínimo 1 GB, redondeando al GB superior.
+
+| Espacio ocupado por el cliente | Se factura | Precio | Costo (externo) | Margen |
+|---|---|---|---|---|
+| 0,8 GB | 1 GB | $2.000 | US$0,006 | 99% |
+| 3,0 GB | 3 GB | $6.000 | US$0,018 | 99% |
+| 5,0 GB | 5 GB | $10.000 | US$0,030 | 99% |
+| 25 GB | 25 GB | $50.000 | US$0,15 | 99% |
+
+**Reglas:**
+- Se mide una vez al día y se factura el promedio del mes, al GB superior.
+- Mínimo facturable: 1 GB (COP $2.000). Un cliente que ocupa 200 MB paga $2.000.
+- El respaldo es opcional: si el cliente no lo contrata, no se le cobra y asume el riesgo.
+- Qué se respalda: base de datos, documentos y credenciales cifradas. **No** se respaldan los vectores (se reconstruyen desde los documentos) ni las imágenes de los contenedores.
+- Con deduplicación, 1 GB ocupado produce ~1,1 GB de respaldo; ese 10% lo absorbe el margen.
+- Retención: 7 días incluidos en el precio; 30 o 90 días se cotizan como plan aparte (COP $10.000 y $20.000/mes por bot).
+
+**Por qué COP $2.000 y no COP $4.000:** COP $4.000/GB es la tarifa del almacenamiento vivo (COP $20.000 por 5 GB). El respaldo se cobra a la mitad para que no se perciba como cobro doble y para incentivar que el cliente lo contrate. Aun así deja 99% de margen si se guarda fuera del VDS; si se guardara dentro, el margen cae a 46%.
+
+**Ejemplo, cliente que ocupa 3 GB:**
+
+| Línea | Detalle | Precio | Nuestro costo |
+|---|---|---|---|
+| Almacenamiento | 5 GB del plan (ocupa 3) | COP $20.000 | US$2,31 |
+| Respaldo | 3 GB × COP $2.000 | COP $6.000 | US$0,02 |
+| **Total** | | **COP $26.000** (US$8,13) | **US$2,33** |
+
+Margen: **71%**. Si el cliente ocupa los 5 GB de su cuota, el respaldo son COP $10.000 y el total COP $30.000.
+
+**Con 100 clientes:** 100 × 3 GB = 300 GB de respaldo. Cuesta US$1,80 al mes en almacenamiento externo y se factura COP $600.000 (US$187,50).
 
 ---
 
@@ -581,11 +665,11 @@ No son costos del producto ni del desarrollo. Van aparte porque dependen de la e
 | Costo por conversación (5 respuestas + 2 utilidades) | **US$0,0037–0,0059** | **US$0,50–1,25** |
 | Costo por 1.000 conversaciones (métrica unitaria) | **US$3,7–5,9** | **US$500–1.250** |
 | Ahorro vs humano | **99–99,8%** | — |
-| Peso de la IA en el costo total | **54–70%** | — |
+| Peso de la IA en el costo total | **47–64%** | — |
 
 El ahorro se calcula cruzando los extremos (peor caso del bot contra el mejor del humano y viceversa); de ahí que el rango sea ancho. En el punto medio, ~99,5%. El costo por conversación suma la IA (14.250 tokens) más 2 plantillas de utilidad; la publicidad (4 al mes) y la infraestructura son fijas y no se reparten aquí.
 
-**Lectura:** el costo lo decide la IA, no el canal: a 100 conversaciones diarias el bot cuesta **US$11,88–18,40** y Meta solo aporta **US$4,85** (utilidad + publicidad). El margen depende del volumen del bot, no de cuántos clientes haya, y está tabulado en **F.6**.
+**Lectura:** el costo lo decide la IA, no el canal: a 100 conversaciones diarias el bot cuesta **US$13,57–19,99** y Meta solo aporta **US$4,85** (utilidad + publicidad). El margen depende del volumen del bot, no de cuántos clientes haya, y está tabulado en **F.6**.
 
 ---
 
@@ -606,7 +690,7 @@ El ahorro se calcula cruzando los extremos (peor caso del bot contra el mejor de
 
 ## E.2 Qué verificar antes de cerrar números
 
-1. **Que los mensajes de servicio dentro de la ventana sigan siendo gratis** en la hoja de Meta para Colombia. Es el supuesto que más mueve el costo: si las respuestas se cobraran, el bot subiría de US$11,88–18,40 a bastante más al mes.
+1. **Que los mensajes de servicio dentro de la ventana sigan siendo gratis** en la hoja de Meta para Colombia. Es el supuesto que más mueve el costo: si las respuestas se cobraran, el bot subiría de US$13,57–19,99 a bastante más al mes.
 2. **Plantillas de utilidad reales por conversación:** el cálculo asume 2 por conversación. El primer mes de registro (medición de plantillas entregadas) dará el dato real.
 3. **Tokens reales por mensaje:** hoy no se registra `usage`; el primer mes de instrumentación dará el dato.
 4. **Volumen real:** 15.000 respuestas del bot por cliente/mes (100 conversaciones al día × 5 respuestas), todas dentro de la ventana. Si el bot inicia conversaciones —campañas, reactivaciones— esas sí se cobran, y por eso van aparte.
@@ -644,21 +728,21 @@ Costo directo del bot típico (70 conversaciones al día), con la infraestructur
 
 | # | Línea | Qué incluye | Costo directo/bot | Precio | Margen |
 |---|---|---|---|---|---|
-| 1 | **Infraestructura del bot** | Servidor, respaldos y **5 GB** de almacenamiento (B.6) | US$0,62–0,72 | **COP $20.000** (US$6,25) | 88–90% |
+| 1 | **Infraestructura del bot** | Servidor y **5 GB** de almacenamiento (B.6) | US$2,31 | **COP $20.000** (US$6,25) | 63% |
 | 2 | **Plataforma + IA** | Panel, monitoreo y 10.500 respuestas de IA | US$4,49–8,98 | **COP $90.000** (US$28,13) | 68–84% |
 | 3 | **Gestión de WhatsApp** | Número del cliente en nuestra cuenta, 4.200 plantillas de utilidad y 4 de publicidad | US$0,05–3,41 | **COP $19.000** (US$5,94) | 43–99% |
-| | **Total recurrente, bot típico** | | **US$8,52–13,11** | **COP $129.000** (US$40,31) | **67–79%** |
+| | **Total recurrente, bot típico** | | **US$10,21–14,70** | **COP $129.000** (US$40,31) | **63–75%** |
 
-Aparte del plan: **almacenamiento adicional**, COP $40.000 por cada 10 GB sobre los 5 GB base (B.6.1), y **campañas**, a la tarifa de Meta más 30%.
+Aparte del plan: **almacenamiento adicional**, COP $40.000 por cada 10 GB sobre los 5 GB base (B.6.1); **respaldos**, COP $2.000 por GB al mes (B.6.3); y **campañas**, a la tarifa de Meta más 30%.
 
 **Cómo se lee cada línea:**
-- **Línea 1** es la cuota de 5 GB del bot (US$0,62–0,72). Es la única línea que no depende del uso.
-- **Línea 2** es la que manda: la IA cuesta US$4,49–8,98, o sea **más de la mitad del costo total** del bot.
+- **Línea 1** es la cuota de 5 GB del bot (US$2,31). Es la única línea que no depende del uso.
+- **Línea 2** es la que manda: la IA cuesta US$4,49–8,98, o sea **casi la mitad del costo total** del bot.
 - **Línea 3** cubre la operación del número y las 4.204 plantillas. El costo va de US$0,05 (si las utilidades caen dentro de la ventana de 24 h) a US$3,41 (si se cobran todas); por eso el margen es ancho, del 43% en el techo al 99% en el caso normal.
 
-**De dónde sale COP $129.000:** del costo (US$8,52–13,11) más el margen que sostiene el soporte y el acompañamiento de entrada. No hay una partida escondida: la IA es la partida dominante y WhatsApp aporta entre US$0,05 y US$3,41.
+**De dónde sale COP $129.000:** del costo (US$10,21–14,70) más el margen que sostiene el soporte y el acompañamiento de entrada. No hay una partida escondida: la IA es la partida dominante y WhatsApp aporta entre US$0,05 y US$3,41.
 
-**Si el bot pasa de 80 conversaciones al día:** el margen del plan Típico cae a 63–76%, y a 100 queda en 54–71%. Para eso está el plan Activo (COP $169.000), que a 100 conversaciones deja 65–78%.
+**Si el bot pasa de 70 conversaciones al día:** el margen del plan Típico cae a 59–72% con 80 y a 50–66% con 100. Para eso está el plan Activo (COP $169.000), que a 100 conversaciones deja 62–74%.
 
 ## F.4 Planes según el uso
 
@@ -672,9 +756,9 @@ Aparte del plan: **almacenamiento adicional**, COP $40.000 por cada 10 GB sobre 
 
 | Plan | Costo directo | Margen |
 |---|---|---|
-| Inicial | US$4,41–6,65 | 76–84% |
-| Típico | US$8,52–13,11 | 67–79% |
-| Activo | US$11,88–18,40 | 65–78% |
+| Inicial | US$6,10–8,24 | 70–78% |
+| Típico | US$10,21–14,70 | 63–75% |
+| Activo | US$13,57–19,99 | 62–74% |
 
 La utilidad escala con las conversaciones (**2.000** en Inicial, **4.200** en Típico y **6.000** en Activo); la publicidad son 4 al mes en los tres.
 
@@ -695,16 +779,16 @@ La utilidad escala con las conversaciones (**2.000** en Inicial, **4.200** en T�
 
 | Conversaciones/día | Costo directo/bot | Precio Típico (COP $129.000) | Margen |
 |---|---|---|---|
-| 20 | US$2,91–4,30 | US$40,31 | **89–93%** |
-| 40 | US$5,16–7,82 | US$40,31 | **81–87%** |
-| 60 | US$7,40–11,35 | US$40,31 | **72–82%** |
-| **70 (base)** | **US$8,52–13,11** | **US$40,31** | **67–79%** |
-| 80 | US$9,64–14,87 | US$40,31 | **63–76%** |
-| 100 | US$11,88–18,40 | US$40,31 | **54–71%** |
+| 20 | US$4,60–5,89 | US$40,31 | **85–89%** |
+| 40 | US$6,85–9,41 | US$40,31 | **77–83%** |
+| 60 | US$9,09–12,94 | US$40,31 | **68–77%** |
+| **70 (base)** | **US$10,21–14,70** | **US$40,31** | **64–75%** |
+| 80 | US$11,33–16,46 | US$40,31 | **59–72%** |
+| 100 | US$13,57–19,99 | US$40,31 | **50–66%** |
 
-**Conclusión:** a COP $129.000 el bot es rentable en todo el rango, pero el margen se estrecha con el uso: **89–93%** con 20 conversaciones al día y **54–71%** con 100. El plan Típico aguanta bien hasta unas **80 conversaciones diarias**; por encima conviene el Activo (COP $169.000), que a 100 deja 65–78%. El precio está dominado por la IA, que es la partida que decide el costo.
+**Conclusión:** a COP $129.000 el bot es rentable en todo el rango, pero el margen se estrecha con el uso: **85–89%** con 20 conversaciones al día y **50–66%** con 100. El plan Típico aguanta hasta unas **70 conversaciones diarias**; por encima conviene el Activo (COP $169.000), que a 100 deja 62–74%. El precio está dominado por la IA, que es la partida que decide el costo.
 
-**Precio mínimo:** cubrir el peor caso del costo directo (US$13,11) exige **COP $42.000**; a 100 conversaciones (US$18,40), **COP $59.000**. El precio de 129.000 deja margen para soporte y acompañamiento de entrada. Si la IA sube de precio o el bot hace más de 5 respuestas por conversación, el primer número que se mueve es la línea 2 de F.3.
+**Precio mínimo:** cubrir el peor caso del costo directo a 70 conversaciones (US$14,70) exige **COP $48.000**; a 100 conversaciones (US$19,99), **COP $64.000**. El precio de COP $129.000 deja margen para soporte y acompañamiento de entrada. Si la IA sube de precio o el bot hace más de 5 respuestas por conversación, el primer número que se mueve es la línea 2 de F.3.
 
 ## F.7 Lo que NO está en esta factura
 
