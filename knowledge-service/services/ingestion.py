@@ -10,7 +10,7 @@ import asyncpg
 from database import get_pool
 
 from .chunking import chunk_text
-from .embedding import embed_texts, embedding_enabled
+from .embedding import embed_texts, embedding_enabled, embedding_model_name
 from .extraction import extract_file_bytes
 
 
@@ -31,7 +31,13 @@ async def _log_step(conn: asyncpg.Connection, job_id: str, step: str, message: s
 # ─── Main ingestion function ─────────────────────────────────────────────────
 
 async def run_ingestion(job_id: str) -> None:
-    """Execute the full ingestion pipeline for a given job."""
+    """Execute the full ingestion pipeline for a given job.
+
+    La extracción, el troceado y la generación de embeddings se ejecutan fuera
+    de la transacción (pueden tardar y hacen llamadas de red). Las escrituras
+    de documento, chunks y embeddings se confirman en una sola transacción:
+    si algo falla, no quedan filas huérfanas ni documentos a medias.
+    """
     pool = await get_pool()
 
     async with pool.acquire() as conn:
@@ -78,30 +84,12 @@ async def run_ingestion(job_id: str) -> None:
             else:
                 raise ValueError(f"No content to extract for source {source_id}")
 
+            await conn.execute(
+                "UPDATE ingestion_jobs SET progress = 20 WHERE id = $1", job_id
+            )
             await _log_step(conn, job_id, "extracting", f"Extracted {len(full_text)} chars from {len(result_pages)} pages")
 
-            # ── Step 3: Create document record ──
-            doc_id = uuid.uuid4()
-            await conn.execute(
-                """
-                INSERT INTO knowledge_documents (id, source_id, title, content, page_count, char_count, metadata)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
-                """,
-                doc_id,
-                source_id,
-                source["title"],
-                full_text,
-                len(result_pages) or None,
-                len(full_text),
-                json.dumps({"source_type": source["source_type"]}),
-            )
-
-            await conn.execute(
-                "UPDATE ingestion_jobs SET progress = 30 WHERE id = $1", job_id
-            )
-            await _log_step(conn, job_id, "document_created", f"Document {doc_id} created")
-
-            # ── Step 4: Chunking ──
+            # ── Step 3: Chunking ──
             await conn.execute(
                 "UPDATE ingestion_jobs SET status = 'chunking' WHERE id = $1", job_id
             )
@@ -112,58 +100,40 @@ async def run_ingestion(job_id: str) -> None:
                     "No se pudo extraer texto del archivo (0 fragmentos) — "
                     + "el documento puede estar escaneado, vacío o ser un formato no soportado"
                 )
+            await conn.execute(
+                "UPDATE ingestion_jobs SET progress = 30 WHERE id = $1", job_id
+            )
             await _log_step(conn, job_id, "chunking", f"Created {len(chunks)} chunks")
 
-            # ── Step 5: Store chunks ──
-            chunk_ids = []
-            for i, chunk_content in enumerate(chunks):
-                cid = uuid.uuid4()
-                await conn.execute(
-                    """
-                    INSERT INTO knowledge_chunks (id, document_id, chunk_index, content, char_count)
-                    VALUES ($1, $2, $3, $4, $5)
-                    """,
-                    cid, doc_id, i, chunk_content, len(chunk_content),
-                )
-                chunk_ids.append(cid)
-
-            await conn.execute(
-                "UPDATE ingestion_jobs SET progress = 60 WHERE id = $1", job_id
-            )
-            await _log_step(conn, job_id, "chunks_stored", f"Stored {len(chunk_ids)} chunks")
-
-            # ── Step 6: Generate embeddings (opcional según proveedor) ──
-            await conn.execute(
-                "UPDATE ingestion_jobs SET status = 'embedding' WHERE id = $1", job_id
-            )
+            # ── Step 4: Generate embeddings (opcional según proveedor) ──
+            # Se calculan antes de abrir la transacción para no mantenerla
+            # abierta durante llamadas HTTP.
+            chunk_vectors: list[list[float]] | None = None
 
             if embedding_enabled():
+                await conn.execute(
+                    "UPDATE ingestion_jobs SET status = 'embedding' WHERE id = $1", job_id
+                )
+
+                chunk_vectors = []
                 batch_size = 20
                 for batch_start in range(0, len(chunks), batch_size):
                     batch_end = min(batch_start + batch_size, len(chunks))
                     batch_chunks = chunks[batch_start:batch_end]
-                    batch_ids = chunk_ids[batch_start:batch_end]
 
                     vectors = await embed_texts(batch_chunks)
-
-                    for cid, vec in zip(batch_ids, vectors):
-                        await conn.execute(
-                            """
-                            INSERT INTO knowledge_embeddings (chunk_id, embedding, model_name, dimension)
-                            VALUES ($1, $2, $3, $4)
-                            """,
-                            cid,
-                            _format_vector(vec),
-                            "text-embedding-3-small-512",
-                            len(vec),
+                    if vectors is None or len(vectors) != len(batch_chunks):
+                        raise ValueError(
+                            f"Embeddings incompletos en el lote {batch_start}-{batch_end}"
                         )
+                    chunk_vectors.extend(vectors)
 
-                    progress = 60 + int(40 * batch_end / len(chunks))
+                    progress = 30 + int(55 * batch_end / len(chunks))
                     await conn.execute(
                         "UPDATE ingestion_jobs SET progress = $1 WHERE id = $2",
                         progress, job_id,
                     )
-                    await _log_step(conn, job_id, "embedding", f"Embedded chunks {batch_start+1}-{batch_end} of {len(chunks)}")
+                    await _log_step(conn, job_id, "embedding", f"Embedded chunks {batch_start + 1}-{batch_end} of {len(chunks)}")
             else:
                 # Sin embeddings: los chunks quedan con is_embedded=false y la
                 # búsqueda usa el reranker de DeepSeek para el ranking semántico.
@@ -172,7 +142,63 @@ async def run_ingestion(job_id: str) -> None:
                     "Embeddings deshabilitados (EMBEDDING_PROVIDER=none) — se usará el reranker",
                 )
 
-            # ── Step 7: Mark completed ──
+            # ── Step 5: Persistencia atómica (documento + chunks + embeddings) ──
+            doc_id = uuid.uuid4()
+            chunk_ids: list[uuid.UUID] = []
+
+            async with conn.transaction():
+                await conn.execute(
+                    """
+                    INSERT INTO knowledge_documents (id, source_id, title, content, page_count, char_count, metadata)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    """,
+                    doc_id,
+                    source_id,
+                    source["title"],
+                    full_text,
+                    len(result_pages) or None,
+                    len(full_text),
+                    json.dumps({"source_type": source["source_type"]}),
+                )
+
+                for i, chunk_content in enumerate(chunks):
+                    cid = uuid.uuid4()
+                    await conn.execute(
+                        """
+                        INSERT INTO knowledge_chunks (id, document_id, chunk_index, content, char_count)
+                        VALUES ($1, $2, $3, $4, $5)
+                        """,
+                        cid, doc_id, i, chunk_content, len(chunk_content),
+                    )
+                    chunk_ids.append(cid)
+
+                if chunk_vectors is not None:
+                    for cid, vec in zip(chunk_ids, chunk_vectors):
+                        await conn.execute(
+                            """
+                            INSERT INTO knowledge_embeddings (chunk_id, embedding, model_name, dimension)
+                            VALUES ($1, $2, $3, $4)
+                            """,
+                            cid,
+                            _format_vector(vec),
+                            embedding_model_name(),
+                            len(vec),
+                        )
+
+                    # Marca los chunks como vectorizados. El índice parcial
+                    # idx_chunks_not_embedded se apoya en esta bandera.
+                    await conn.execute(
+                        "UPDATE knowledge_chunks SET is_embedded = TRUE WHERE document_id = $1",
+                        doc_id,
+                    )
+
+            await conn.execute(
+                "UPDATE ingestion_jobs SET progress = 90 WHERE id = $1", job_id
+            )
+            await _log_step(conn, job_id, "document_created", f"Document {doc_id} created")
+            await _log_step(conn, job_id, "chunks_stored", f"Stored {len(chunk_ids)} chunks")
+
+            # ── Step 6: Mark completed ──
             await conn.execute(
                 """
                 UPDATE ingestion_jobs
@@ -188,6 +214,8 @@ async def run_ingestion(job_id: str) -> None:
             await _log_step(conn, job_id, "completed", "Ingestion completed successfully")
 
         except Exception as exc:
+            # La transacción (si llegó a abrirse) ya hizo rollback: no quedan
+            # documento/chunks/embeddings parciales. Solo registramos el fallo.
             await conn.execute(
                 """
                 UPDATE ingestion_jobs
